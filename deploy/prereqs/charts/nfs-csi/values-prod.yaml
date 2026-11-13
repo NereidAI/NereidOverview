@@ -1,0 +1,20 @@
+# Production overlay - site-specific deltas only. Values not listed here
+# fall through to values.yaml (image refs/tags, StorageClass name, mount
+# options, subDir). Both fields are required: the StorageClass template
+# fails rendering when either is left empty.
+nfs:
+  nfs:
+    # Site NFS server; no default exists.
+    server: ""
+    # Site NFS export path.
+    share: ""
+  storageClass:
+    # Upstream subchart key is "create"; an earlier overlay used "enabled",
+    # which the upstream chart silently ignores.
+    create: false
+    name: nfs-csi
+    defaultClass: false
+  # Upstream v4.7 template reads .Values.controller.replicas (with the
+  # wrapper alias this is nfs.controller.replicas).
+  controller:
+    replicas: 2

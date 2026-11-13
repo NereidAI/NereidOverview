@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ .Release.Name }}-install-{{ .Chart.Name }}"
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "{{ .Values.hookWeight }}"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      name: "{{ .Release.Name }}-install-{{ .Chart.Name }}"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: install
+          image: "{{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}"
+          command: ["/bin/bash", "/scripts/apply.sh"]
+          env:
+            - name: MANIFESTS_DIR
+              value: /manifests
+            - name: REGISTRY_DOMAIN
+              value: {{ .Values.global.registry.domain | quote }}
+            - name: REGISTRY_PROJECT
+              value: {{ .Values.global.registry.project | quote }}
+            - name: DEX_STATIC_EMAIL
+              value: {{ .Values.global.dex.staticEmail | quote }}
+            - name: DEX_STATIC_PASSWORD_HASH
+              value: {{ .Values.global.dex.staticPasswordHash | quote }}
+            - name: TARGETS
+              value: {{ .Values.targets | quote }}
+          volumeMounts:
+            - name: manifests
+              mountPath: /manifests
+            - name: kubeconfig
+              mountPath: /kube
+              readOnly: true
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: manifests
+          hostPath:
+            path: {{ .Values.global.manifests.hostPath | quote }}
+            type: Directory
+        - name: kubeconfig
+          hostPath:
+            path: {{ .Values.global.kubeconfig.hostPath | quote }}
+            type: File
+        - name: scripts
+          configMap:
+            name: "{{ .Release.Name }}-{{ .Chart.Name }}-script"
+            defaultMode: 0755

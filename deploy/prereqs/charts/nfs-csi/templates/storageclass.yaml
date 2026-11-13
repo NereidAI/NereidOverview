@@ -1,0 +1,33 @@
+{{- /*
+Suite-contract StorageClass rendered by the wrapper. The subchart's own
+StorageClass creation is disabled via nfs.storageClass.create=false. The
+class is non-default (local-path stays the default), Delete reclaim,
+immediate binding, per-PVC subDir isolation under the NFS export,
+allowVolumeExpansion=true.
+*/ -}}
+{{- if not .Values.nfs.nfs.server -}}
+{{- fail "nfs.nfs.server is required: supply a real NFS host via a site overlay (see values-prod.yaml)" -}}
+{{- end -}}
+{{- if not .Values.nfs.nfs.share -}}
+{{- fail "nfs.nfs.share is required: supply a real NFS export path via a site overlay (see values-prod.yaml)" -}}
+{{- end -}}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.nfs.storageClass.name }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: {{ if .Values.nfs.storageClass.defaultClass }}"true"{{ else }}"false"{{ end }}
+provisioner: nfs.csi.k8s.io
+reclaimPolicy: {{ .Values.nfs.storageClass.reclaimPolicy }}
+{{- if .Values.nfs.storageClass.allowVolumeExpansion }}
+allowVolumeExpansion: {{ .Values.nfs.storageClass.allowVolumeExpansion }}
+{{- end }}
+volumeBindingMode: {{ .Values.nfs.storageClass.volumeBindingMode }}
+mountOptions:
+{{- toYaml .Values.nfs.storageClass.mountOptions | nindent 2 }}
+parameters:
+  server: {{ .Values.nfs.nfs.server | quote }}
+  share: {{ .Values.nfs.nfs.share | quote }}
+{{- if .Values.nfs.storageClass.subDir }}
+  subDir: {{ .Values.nfs.storageClass.subDir | quote }}
+{{- end }}

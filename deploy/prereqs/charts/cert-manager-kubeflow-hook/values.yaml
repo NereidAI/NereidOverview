@@ -1,0 +1,5 @@
+# Per-component subchart values. Global config (registry, dex, tenant, manifests,
+# kubeconfig, image) comes from the parent chart's .Values.global and is injected
+# into the install hook at render time.
+targets: "common/cert-manager/base"
+hookWeight: 0

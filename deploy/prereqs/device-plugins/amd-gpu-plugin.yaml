@@ -1,0 +1,51 @@
+# Vendored from the ROCm/k8s-device-plugin repository (Apache-2.0):
+# https://raw.githubusercontent.com/ROCm/k8s-device-plugin/v1.31.0.10/k8s-ds-amdgpu-dp.yaml
+# (vendored 2026-10-19). The image keeps its public upstream coordinate;
+# air-gapped nodes resolve it through the containerd Harbor mirror
+# (see deploy/prereqs/images.txt). Keep the upstream manifest
+# structure when bumping the version; the upstream file itself carries no
+# license header; the repository is Apache-2.0.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: amdgpu-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  # Matches the upstream manifest; DaemonSet selectors are immutable.
+  selector:
+    matchLabels:
+      name: amdgpu-dp-ds
+  template:
+    metadata:
+      labels:
+        name: amdgpu-dp-ds
+    spec:
+      restartPolicy: Always
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      priorityClassName: system-node-critical
+      tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+      containers:
+      # Public upstream coordinate; air-gapped nodes resolve it through the
+      # containerd Harbor mirror (see deploy/prereqs/images.txt).
+      - image: docker.io/rocm/k8s-device-plugin:1.31.0.10
+        imagePullPolicy: IfNotPresent
+        name: amdgpu-dp-cntr
+        securityContext:
+          privileged: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+          - name: dp
+            mountPath: /var/lib/kubelet/device-plugins
+          - name: sys
+            mountPath: /sys
+      volumes:
+        - name: dp
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: sys
+          hostPath:
+            path: /sys

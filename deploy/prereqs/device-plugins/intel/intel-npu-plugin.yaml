@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app: intel-npu-plugin
+  name: intel-npu-plugin
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: intel-npu-plugin
+  template:
+    metadata:
+      labels:
+        app: intel-npu-plugin
+    spec:
+      containers:
+      - args:
+        - -v=4
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # Public upstream coordinate; air-gapped nodes resolve it through the
+        # containerd Harbor mirror (see deploy/prereqs/images.txt).
+        image: docker.io/intel/intel-npu-plugin:0.36.0
+        imagePullPolicy: IfNotPresent
+        name: intel-npu-plugin
+        resources:
+          limits:
+            cpu: 100m
+            memory: 90Mi
+          requests:
+            cpu: 40m
+            memory: 45Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          seLinuxOptions:
+            type: container_device_plugin_t
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /dev/accel
+          name: devfs
+          readOnly: true
+        - mountPath: /sys/class/accel
+          name: sysfsaccel
+          readOnly: true
+        - mountPath: /var/lib/kubelet/device-plugins
+          name: kubeletsockets
+      nodeSelector:
+        intel.feature.node.kubernetes.io/npu: "true"
+        kubernetes.io/arch: amd64
+      volumes:
+      - hostPath:
+          path: /dev/accel
+        name: devfs
+      - hostPath:
+          path: /sys/class/accel
+        name: sysfsaccel
+      - hostPath:
+          path: /var/lib/kubelet/device-plugins
+        name: kubeletsockets
+  updateStrategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate

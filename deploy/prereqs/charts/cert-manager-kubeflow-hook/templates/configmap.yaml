@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "{{ .Release.Name }}-{{ .Chart.Name }}-script"
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "{{ .Values.hookWeight }}"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  apply.sh: |
+{{ .Files.Get "files/apply.sh" | indent 4 }}

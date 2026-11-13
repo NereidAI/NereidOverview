@@ -1,0 +1,36 @@
+# Copyright (C) 2026 YIQISOFT
+# SPDX-License-Identifier: Apache-2.0
+#
+# Cluster-shared prerequisite image manifest for harbor-sync.sh mirror
+# Host-free by design: the left column is the canonical public
+# coordinate, the right column is the Harbor-relative project/path:tag. The
+# internal hostname is injected at run time from harbor.env / HARBOR_HOST.
+#
+# Usage:
+#   HARBOR_HOST=<internal-harbor-host> ./deploy/scripts/harbor-sync.sh mirror \
+#       deploy/prereqs/images.txt
+#
+# The human-readable counterpart is images.md; keep the two in sync.
+
+# cert-manager v1.15.3 (internal-ca ClusterIssuer; ACME solver kept complete)
+quay.io/jetstack/cert-manager-controller:v1.15.3  nereidai/cert-manager-controller:v1.15.3
+quay.io/jetstack/cert-manager-webhook:v1.15.3  nereidai/cert-manager-webhook:v1.15.3
+quay.io/jetstack/cert-manager-cainjector:v1.15.3  nereidai/cert-manager-cainjector:v1.15.3
+quay.io/jetstack/cert-manager-startupapicheck:v1.15.3  nereidai/cert-manager-startupapicheck:v1.15.3
+quay.io/jetstack/cert-manager-acmesolver:v1.15.3  nereidai/cert-manager-acmesolver:v1.15.3
+
+# csi-driver-nfs v4.7.0 and its pinned sidecars (images.md §csi-driver-nfs)
+registry.k8s.io/sig-storage/nfsplugin:v4.7.0  nereidai/csi-driver-nfs:v4.7.0
+registry.k8s.io/sig-storage/csi-provisioner:v5.0.1  nereidai/csi-provisioner:v5.0.1
+registry.k8s.io/sig-storage/csi-snapshotter:v8.0.1  nereidai/csi-snapshotter:v8.0.1
+registry.k8s.io/sig-storage/livenessprobe:v2.13.1  nereidai/livenessprobe:v2.13.1
+registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.1  nereidai/csi-node-driver-registrar:v2.11.1
+
+# GPU/NPU device plugins (mirror only at sites with matching hardware)
+nvcr.io/nvidia/k8s-device-plugin:v0.17.1  nvidia/k8s-device-plugin:v0.17.1
+docker.io/rocm/k8s-device-plugin:1.31.0.10  rocm/k8s-device-plugin:1.31.0.10
+docker.io/intel/intel-gpu-plugin:0.36.0  intel/intel-gpu-plugin:0.36.0
+docker.io/intel/intel-npu-plugin:0.36.0  intel/intel-npu-plugin:0.36.0
+
+# Node Feature Discovery (required by the Intel device plugins)
+registry.k8s.io/nfd/node-feature-discovery:v0.17.1  nfd/node-feature-discovery:v0.17.1

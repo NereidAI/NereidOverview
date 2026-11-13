@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cert-manager
+description: Kubeflow cert-manager component (helm subchart of charts/kubeflow)
+type: application
+version: 0.1.0

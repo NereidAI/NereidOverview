@@ -1,0 +1,44 @@
+# Copyright (C) 2026 YIQISOFT
+# SPDX-License-Identifier: Apache-2.0
+#
+# Suite internal certificate authority.
+#
+# Applied after cert-manager is installed (see docs/deploy/install-suite.md,
+# Phase 0). Creates a self-signed root CA used by every product Ingress via the
+# cluster-wide `internal-ca` ClusterIssuer. The CA private key lives in the
+# `nereid-internal-ca-tls` Secret in the cert-manager namespace; product
+# namespaces that must trust the CA mount the `ca.crt` key from a copy of this
+# Secret.
+#
+# Apply in order:
+#   kubectl apply -f deploy/prereqs/manifests/00-internal-ca.yaml
+#
+# Verified against the live nereidai cluster on 2026-10-29.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nereid-internal-ca
+  namespace: cert-manager
+spec:
+  commonName: nereid-internal-ca
+  isCA: true
+  issuerRef:
+    kind: ClusterIssuer
+    name: selfsigned
+  secretName: nereid-internal-ca-tls
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: internal-ca
+spec:
+  ca:
+    secretName: nereid-internal-ca-tls

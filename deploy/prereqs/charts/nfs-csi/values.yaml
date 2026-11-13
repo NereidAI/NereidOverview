@@ -1,0 +1,61 @@
+# Default values for the NereidAI suite nfs-csi wrapper chart.
+#
+# No real NFS endpoint is shipped: nfs.nfs.server below is an RFC 2606
+# placeholder that renders for linting only. Every deployment must supply
+# its own NFS server/share through a site overlay (see values-prod.yaml for
+# the required skeleton); rendering fails on an empty server or share.
+# Image refs/tags are pinned per deploy/prereqs/images.md (csi-driver-nfs
+# v4.7.0).
+nfs:
+  nfs:
+    # Placeholder only; replace via a site overlay, never by editing this file.
+    server: "nfs.example.invalid"
+    # Placeholder export path; replace via a site overlay.
+    share: "/export/nfs"
+  storageClass:
+    # The subchart's own StorageClass is disabled; this wrapper renders the
+    # suite-contract SC (name nfs-csi) from templates/storageclass.yaml.
+    create: false
+    name: nfs-csi
+    # local-path remains the cluster default SC; nfs-csi is selected
+    # explicitly by product PVCs.
+    defaultClass: false
+    reclaimPolicy: Delete
+    volumeBindingMode: Immediate
+    allowVolumeExpansion: true
+    # Expanded per PVC into a unique subdirectory under the export, so every
+    # namespace/PVC gets an isolated directory. Empty string disables subDir.
+    subDir: ${pvc.metadata.namespace}-${pvc.metadata.name}
+    mountOptions:
+      - nfsvers=4.2
+      - hard
+  externalSnapshotter:
+    enabled: false
+  image:
+    # Public upstream coordinates (deploy-standards §15.3); air-gapped nodes resolve
+    # them through the containerd Harbor mirror, never via a chart override.
+    baseRepo: "registry.k8s.io/sig-storage"
+    nfs:
+      repository: "/nfsplugin"
+      tag: v4.7.0
+      pullPolicy: IfNotPresent
+    csiProvisioner:
+      repository: "/csi-provisioner"
+      tag: v5.0.1
+      pullPolicy: IfNotPresent
+    csiSnapshotter:
+      repository: "/csi-snapshotter"
+      tag: v8.0.1
+      pullPolicy: IfNotPresent
+    livenessProbe:
+      repository: "/livenessprobe"
+      tag: v2.13.1
+      pullPolicy: IfNotPresent
+    nodeDriverRegistrar:
+      repository: "/csi-node-driver-registrar"
+      tag: v2.11.1
+      pullPolicy: IfNotPresent
+    externalSnapshotter:
+      repository: "/csi-snapshotter"
+      tag: v8.0.1
+      pullPolicy: IfNotPresent
