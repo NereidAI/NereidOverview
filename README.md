@@ -72,6 +72,7 @@ steps with image delivery handled per
 |---|---|
 | Cluster-shared prerequisites (cert-manager, NFS CSI, GPU/NPU plugins) | [`deploy/prereqs/`](deploy/prereqs/) |
 | Air-gapped delivery rules and tooling | [Deploy & delivery standards](docs/deploy-standards.md) §15.3, §15.10 |
+| Contribute a fix or improvement | [Contributing guide](CONTRIBUTING.md) |
 | Full product list and architecture overview | [NereidAI organization page](https://github.com/NereidAI) |
 
 ## Deployment modes and support boundaries
@@ -140,6 +141,15 @@ on the [organization page](https://github.com/NereidAI).
 | `docs/` | Deployment runbooks, reference material, and the deployment/packaging/delivery standards |
 | [`deploy/prereqs/`](deploy/prereqs/) | Cluster-shared components: cert-manager, NFS CSI, GPU/NPU device plugins |
 | [`deploy/scripts/`](deploy/scripts/) | Air-gapped image mirroring tooling and its empty environment template |
+
+## Contributing
+
+Contributions are welcome — runbook corrections, prerequisite manifests, and
+air-gapped tooling improvements all start here; product runtime changes go to
+the product's own repository. Every commit must carry a Developer Certificate
+of Origin sign-off, and every contribution is licensed under Apache-2.0. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full rules, including copyright
+handling and the host-free requirements.
 
 ## Repositories
 
