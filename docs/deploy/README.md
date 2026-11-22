@@ -1,67 +1,65 @@
-# Deployment Guides
+# Public Deployment Guides
 
-Full-suite deployment is a linear chain — do not skip or reorder phases.
-Click a node to open its guide:
+Install the suite manually on an internet-connected Kubernetes/k3s cluster.
+Do not skip or reorder phases. Each product uses a versioned public GHCR OCI
+chart and public images; NereidOverview supplies only shared prerequisites and
+suite documentation.
 
-> **Mode support boundary (suite-wide rule).** Dev mode is for development
-> only and is never supported in production. Docker/Compose mode is partially
-> production-supported: single-host, edge and air-gapped appliance deployments
-> that follow a product's explicitly documented production Compose path are
-> supported within their stated limits, but Compose cannot provide clustering,
-> high availability or horizontal scaling. Kubernetes (k3s + Helm, the chain
-> below) is the strongly recommended, full-featured production form. Edge
-> products (NereidEdge, NereidInference) have no Kubernetes mode — their
-> production form is the Open Horizon service definition delivered by
-> NereidHorizon. See the root README "Deployment modes and support boundaries"
-> and [deploy-standards §15.14](../deploy-standards.md).
+> **Availability gate:** Identity, Sphere, Horizon, and Link have verified
+> immutable Lab/POC artifacts. Forge does not yet have a complete public
+> installation channel. On an empty cluster, stop after Horizon and wait for a
+> verified complete Forge release. Never install Link without healthy Forge
+> SeaweedFS.
 
 ```mermaid
 flowchart LR
     classDef host fill:#eef2f7,stroke:#8a97a8,color:#1f2933
     classDef phase fill:#e3f2fd,stroke:#1976d2,color:#0d2b45
-    classDef verify fill:#e8f5e9,stroke:#388e3c,color:#14391a
+    classDef blocked fill:#fff4e5,stroke:#b26a00,color:#5c3600
 
-    A["<b>Host preparation</b><br/>OS · network · NFS · Docker"]:::host --> B
-    B["<b>Phase -1</b><br/>Cluster bootstrap<br/>bare metal → k3s → Rancher"]:::phase --> C
-    C["<b>Phase 0</b><br/>Shared prerequisites<br/>cert-manager · nfs-csi · GPU plugins"]:::phase --> D
-    D["<b>Phase 1</b><br/>Products<br/>Identity → Sphere → Link → Horizon → Forge"]:::phase --> E
-    E["<b>Phase 2</b><br/>Verification<br/>end-to-end · delivery sign-off"]:::verify
+    C["Rancher-managed empty k3s cluster"]:::host
+    P["Phase 0<br/>Shared prerequisites"]:::phase
+    I["NereidIdentity"]:::phase
+    S["NereidSphere"]:::phase
+    H["NereidHorizon"]:::phase
+    F["NereidForge<br/>complete public release required"]:::blocked
+    L["NereidLink"]:::phase
+    E["Open Horizon edge delivery"]:::host
+    M["Separate ESS model delivery"]:::host
 
-    click B "cluster-bootstrap.md" "Cluster bootstrap guide"
-    click C "../../deploy/prereqs/README.md" "Cluster-shared prerequisites"
-    click D "install-suite.md" "Product installation guide"
-    click E "reference/fresh-cluster-checklist.md" "Fresh-cluster checklist"
+    C --> P --> I --> S --> H --> F --> L --> E --> M
+
+    click C "cluster-bootstrap.md"
+    click P "../../deploy/prereqs/README.md"
+    click I "install-suite.md#5-phase-1--nereididentity"
+    click S "install-suite.md#61-nereidsphere"
+    click H "install-suite.md#62-nereidhorizon"
+    click F "install-suite.md#7-forge-availability-gate"
+    click L "install-suite.md#8-nereidlink-after-forge"
+    click E "install-suite.md#9-open-horizon-edge-delivery"
+    click M "install-suite.md#9-open-horizon-edge-delivery"
 ```
 
-| Phase | Guide | Output |
+## Guides
+
+| Stage | Guide | Required result |
 |---|---|---|
-| -1. Cluster bootstrap | [Bootstrap k3s with Rancher](cluster-bootstrap.md) | Rancher management server + an empty managed k3s cluster |
-| 0. Shared prerequisites | [`deploy/prereqs/`](../../deploy/prereqs/README.md), walkthrough in [install-suite](install-suite.md) §4 | cert-manager / internal-ca, `nfs-csi` StorageClass, GPU/NPU device plugins |
-| 1. Products | [Install the NereidAI suite](install-suite.md) §6 | NereidIdentity → NereidSphere → NereidLink → NereidHorizon (Forge/edge: §7) |
-| 2. Verification | [Fresh-cluster checklist](reference/fresh-cluster-checklist.md) | End-to-end checks and delivery sign-off |
+| Cluster | [Cluster bootstrap](cluster-bootstrap.md) | Reachable, Rancher-managed empty k3s cluster with public registry access |
+| Phase 0 | [Shared prerequisites](../../deploy/prereqs/README.md) and [suite guide §4](install-suite.md#4-phase-0--shared-prerequisites) | Ready cert-manager/internal-ca, working storage, and required hardware plugins |
+| Products | [Suite installation](install-suite.md) | Ordered product installation with explicit values, health checks, and stop conditions |
+| Acceptance | [Fresh-cluster checklist](reference/fresh-cluster-checklist.md) | Recorded health, SSO, storage, MQTT, edge, and separate ESS evidence |
+| Reference | [Accounts, DNS, and connections](reference/accounts-dns-connections.md) | Matching public endpoints, secrets, and inter-product settings |
+| Engineering | [Public deployment standards](../deploy-standards.md) | Version pinning, artifact verification, source ownership, and release boundaries |
 
-The product install order inside Phase 1 is strict:
-**Identity → Sphere → Link/Horizon → Forge** (Forge may run in parallel but is
-verified separately; the edge stack goes last).
+## Non-negotiable ordering rules
 
-Reference material:
-
-- [Accounts, DNS, and inter-product connections](reference/accounts-dns-connections.md) — credential
-  baseline, DNS/Ingress naming, and the cross-product connection matrix
-- [Deployment & delivery standards](../deploy-standards.md) — normative rules
-  for image coordinates, Helm, Makefile, CI, and air-gapped delivery
-
-## Single product
-
-You do not need this chain to run one product. Every product is independently
-deployable — clone only that repository and follow its own README and `docs/`.
-
-## Air-gapped sites
-
-Online deployment is the default path. For an offline customer site the install
-steps themselves do not change — only image delivery does, entirely at the
-registry/node layer. The complete operator procedure (two image classes,
-`harbor-sync.sh` mirror/push/node-mirror, online/jump-host/fully-offline
-scenarios) is [install-suite §2](install-suite.md#2-image-delivery-and-registries),
-with the normative rules in [deploy-standards §15.2/§15.3/§15.10](../deploy-standards.md)
-and deploy-standards §15.2–§15.10.
+- Identity establishes the realm and product clients before any consumer.
+- Sphere is healthy before products use its ticket/session layer.
+- Horizon is initialized before edge or model delivery.
+- Forge completes infrastructure, Kubeflow integration, applications, and
+  verification before Link starts.
+- Link uses Forge SeaweedFS from its first installation; there is no temporary
+  object-store stage.
+- Open Horizon registration and Pattern/agreement delivery precede
+  NereidEdge-to-Link acceptance.
+- ESS model delivery is a separate operation after edge service delivery.

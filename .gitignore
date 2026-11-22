@@ -1,3 +1,2 @@
-# Site-local Harbor credentials and hostname (deploy-standards §15.3); use
-# deploy/scripts/harbor.env.example as the template.
-/deploy/scripts/harbor.env
+# Never commit operator-supplied site state placed inside this checkout.
+/.nereidai-deployment/

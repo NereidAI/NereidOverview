@@ -14,10 +14,8 @@
 #
 # NereidAI vendored copy: upstream static manifest from
 # https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.1/deployments/static/nvidia-device-plugin.yml
-# (vendored 2026-10-19). The image keeps its public upstream coordinate;
-# air-gapped nodes resolve it through the containerd Harbor mirror
-# (see deploy/prereqs/images.txt). Keep the upstream manifest
-# structure when bumping the version.
+# (vendored 2026-10-19). The image keeps its public upstream coordinate.
+# Keep the upstream manifest structure when bumping the version.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -44,8 +42,7 @@ spec:
       # See https://kubernetes.io/docs/tasks/administer-cluster/guaranteed-scheduling-critical-addon-pods/
       priorityClassName: "system-node-critical"
       containers:
-      # Public upstream coordinate; air-gapped nodes resolve it through the
-      # containerd Harbor mirror (see deploy/prereqs/images.txt).
+      # Pinned public upstream image.
       - image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
         imagePullPolicy: IfNotPresent
         name: nvidia-device-plugin-ctr

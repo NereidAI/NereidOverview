@@ -1,10 +1,8 @@
-# Vendored render of upstream kustomize (air-gapped):
+# Vendored render of upstream kustomize:
 #   intel-device-plugins-for-kubernetes v0.36.0,
 #   deployments/gpu_plugin/overlays/monitoring_shared-dev_nfd
-# Suite deltas vs upstream overlay: image keeps its public upstream
-# coordinate (air-gapped resolution goes through the containerd Harbor
-# mirror per deploy-standards §15.3); shared-dev-num=10
-# (suite standard, each physical GPU is sliceable into 10 shared devices);
+# The image keeps its public upstream coordinate. Suite deltas vs upstream:
+# shared-dev-num=10 (each physical GPU is sliceable into 10 shared devices);
 # balanced allocation spreads independent containers across physical GPUs;
 # namespace pinned to kube-system (upstream base has none).
 # Node selection relies on the NFD label intel.feature.node.kubernetes.io/gpu=true.
@@ -39,8 +37,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: status.hostIP
-        # Public upstream coordinate; air-gapped nodes resolve it through the
-        # containerd Harbor mirror (see deploy/prereqs/images.txt).
+        # Pinned public upstream image.
         image: docker.io/intel/intel-gpu-plugin:0.36.0
         imagePullPolicy: IfNotPresent
         name: intel-gpu-plugin

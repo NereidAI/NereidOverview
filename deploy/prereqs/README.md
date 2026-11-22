@@ -1,43 +1,45 @@
-# NereidAI Cluster-shared Prerequisites
+# NereidAI Cluster-Shared Prerequisites
 
-> Order: the cluster itself (bare metal → k3s → Rancher management) is covered in
-> [`../../docs/deploy/cluster-bootstrap.md`](../../docs/deploy/cluster-bootstrap.md);
-> once the cluster is ready, install the shared components in this directory; only then do the
-> products get deployed ([`../../docs/deploy/install-suite.md`](../../docs/deploy/install-suite.md)).
+Prepare the cluster with the
+[cluster bootstrap guide](../../docs/deploy/cluster-bootstrap.md), then install
+these shared components before any product. Continue with the
+[suite installation guide](../../docs/deploy/install-suite.md), which provides
+the ordered commands and acceptance gates.
 
-This directory holds deployment artifacts and docs for **cluster-level components shared by
-multiple NereidAI products**. They belong to no single product (NereidForge / NereidLink /
-NereidHorizon / NereidSphere …) and are planned and installed uniformly at the suite layer; product
-repositories **no longer ship install logic for these components** and only preflight-check them
-before deployment.
+This directory contains cluster-level components shared by multiple NereidAI
+products. Product charts preflight these contracts; they do not install a second
+copy of cluster infrastructure.
 
-> Migrated from the NereidForge repository on 2026-10-19. Reason: cert-manager, CSI storage
-> drivers, and GPU device plugins are common components almost every product needs; keeping them
-> in a single product repository caused duplicate installs, version drift, and the boundary
-> inversion of "a product installing cluster infrastructure".
+## Components
 
-## Component list
-
-| Component | Form | Notes |
+| Component | Source | Contract |
 |---|---|---|
-| **cert-manager** + `internal-ca` ClusterIssuer | Install walkthrough: [`../../docs/deploy/install-suite.md`](../../docs/deploy/install-suite.md) §4.1–§4.2; manifest in [`manifests/00-internal-ca.yaml`](manifests/00-internal-ca.yaml) | Prefer the official jetstack helm chart; `charts/cert-manager-kubeflow-hook/` is only an alternative wrapper for the Kubeflow upstream-manifest approach and is normally unused |
-| **csi-driver-nfs** + StorageClass `nfs-csi` | Helm wrapper chart: [`charts/nfs-csi/`](charts/nfs-csi); install-suite prerequisites section | RWX storage prerequisite for product PVCs; the SC name `nfs-csi` is the default contract in product values |
-| **GPU device plugins** (NVIDIA / AMD / Intel) | Manifests + guide: [`device-plugins/`](device-plugins/README.md) | Only advertises host GPUs as extended resources; drivers/container-runtime setup are node prerequisites |
+| cert-manager and `internal-ca` | [Suite guide §4.1](../../docs/deploy/install-suite.md#41-cert-manager-and-internal-ca) and [`manifests/00-internal-ca.yaml`](manifests/00-internal-ca.yaml) | Ready cert-manager, `internal-ca` ClusterIssuer, and CA public-certificate distribution |
+| NFS CSI and StorageClass | [`charts/nfs-csi/`](charts/nfs-csi/) and [suite guide §4.2](../../docs/deploy/install-suite.md#42-nfs-csi-storageclass) | Working `nfs-csi` StorageClass with per-PVC subdirectories |
+| GPU/NPU device plugins | [`device-plugins/`](device-plugins/README.md) | Hardware-specific extended resources visible in node capacity |
 
-## Product-side contract
+`charts/cert-manager-kubeflow-hook/` is an optional helper for a parent Kubeflow
+Kustomize installation. It renders the selected public upstream manifests and
+does not replace the suite cert-manager installation above.
 
-Product deployers only check, never install:
+All images retain pinned public upstream coordinates. The operator host and
+cluster nodes must be able to retrieve every selected chart and image without
+authentication. Verify the exact version before installation.
+
+## Product-side preflight
+
+Run these checks from the NereidOverview repository root after completing the
+relevant installation steps:
 
 ```bash
-kubectl get clusterissuer internal-ca          # cert-manager + internal CA
-kubectl get storageclass nfs-csi               # RWX StorageClass (name may change via site values)
-kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | grep -E 'nvidia.com/gpu|amd.com/gpu|gpu.intel.com'
+kubectl get clusterissuer internal-ca
+kubectl get storageclass nfs-csi
+kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' \
+  | grep -E 'nvidia.com/gpu|amd.com/gpu|gpu.intel.com'
 ```
 
-When a prerequisite is missing, the product installer must **fail with an error pointing at this
-directory/the deployment guide**, never install it itself.
+The last command is required only for products and workloads that need the
+corresponding hardware. Install plugins only for hardware actually present.
 
-## Offline images
-
-The shared-component image list is in [`images.md`](images.md); these images go into the
-suite-level offline bundle and are not duplicated in any single product's offline image list.
+When a prerequisite is missing, stop and complete the shared-prerequisite phase.
+Do not let a product installer create an independent replacement.

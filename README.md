@@ -1,166 +1,112 @@
 # NereidOverview
 
-**Start here.** This is the source-code entry point for the NereidAI suite.
-Whether you are deploying the platform for the first time or doing secondary
-development, you begin in this repository.
+**Start here for public NereidAI installation.** This repository contains the
+suite runbooks, delivery standards, and cluster-shared prerequisites. Product
+runtime code and product-owned Helm chart sources remain in their respective
+repositories.
 
-It contains no product runtime code — only orientation, the full-suite
-deployment runbooks and reference material, deployment standards,
-cluster-shared prerequisites, and air-gapped delivery tooling. Products ship
-in their own repositories; the scenario guide below explains which ones make
-sense alone and which only work as part of a combination.
+The supported installation form is an internet-connected Kubernetes/k3s
+cluster using versioned GHCR OCI charts and public images. Operators run every
+step manually and verify each phase before continuing.
 
-> **What is NereidAI?** Product descriptions, architecture, and the full
-> product list live on the [NereidAI organization page](https://github.com/NereidAI).
-> This README covers working with the source only.
+## Installation path
 
-## Choose your deployment path
+1. Prepare or accept a Rancher-managed empty k3s cluster with the
+   [cluster bootstrap guide](docs/deploy/cluster-bootstrap.md).
+2. Install the [cluster-shared prerequisites](deploy/prereqs/README.md).
+3. Follow the [suite installation guide](docs/deploy/install-suite.md) in this
+   strict order:
 
-Three scenarios cover the practical ways teams enter the suite. Pick the
-smallest one that fits your goal; every product also has its own README with
-the product-level details.
+   **NereidIdentity → NereidSphere → NereidHorizon → NereidForge → NereidLink**
 
-### Scenario 1 — Single product: testing or development
+4. Deliver field services through Open Horizon, configure NereidEdge to connect
+   to Link, and deliver models through ESS as a separate operation.
+5. Complete the [fresh-cluster checklist](docs/deploy/reference/fresh-cluster-checklist.md).
 
-No ordering and no suite-wide prerequisites: clone one repository and follow
-its README. Standalone suitability differs by product role:
+NereidLink requires Forge SeaweedFS and its exact credentials from the first
+installation. Do not install Link before Forge is healthy.
 
-| Product | Role | Meaningful on its own? |
+## Verified Lab/POC artifacts
+
+The following immutable versions passed anonymous chart pull/render and
+image-manifest verification on 2026-11-22:
+
+| Product | Chart and image version | Source commit |
 |---|---|---|
-| NereidLink | Private IoT platform: device onboarding, telemetry, rules, alerts | **Yes** — testing the IoT platform is a single-repo job |
-| NereidForge | Model factory: annotation, training, optimization, evaluation, model registry | **Yes** — testing the model factory is a single-repo job |
-| NereidHorizon | Edge/OTA distribution plane built on Open Horizon | **Yes** — edge distribution can be evaluated on its own |
-| NereidEdge | Field gateway policy/guard process (EdgeX application service) | **No** — designed to pair with NereidLink as its northbound platform |
-| NereidInference | Edge inference runtime (EdgeX device service) | **No** — auxiliary to NereidEdge; it has no standalone purpose |
-| NereidSphere | Suite portal and unified entry point | **No** — only makes sense with products behind it |
-| NereidIdentity | Suite identity plane (SSO/OIDC, RBAC, tenant governance) | **No** — only makes sense with products federating to it |
+| NereidIdentity | `0.0.0-dev-7c2797d` | `7c2797ddec13d6fcef72a535069738d247173e61` |
+| NereidSphere | `0.0.0-dev-90379cb` | `90379cbec953c51b5807cf60f53c17fb736da1ff` |
+| NereidHorizon | `0.0.0-dev-05aaf97` | `05aaf97bb5d3119f00ccc2ea90d3e8bb86dda49d` |
+| NereidLink | `0.0.0-dev-6da29bd` | `6da29bdca204510bd4b8560c503ead28bc231c0b` |
 
-### Scenario 2 — Docker / Compose: testing or simple commercial deployment
+Charts use `oci://ghcr.io/nereidai/charts/<chart-name>` with an explicit
+`--version`. Each chart selects matching suite images through its `appVersion`.
+The floating `0.0.0-dev` channel is not a reproducible installation input.
+Formal deployments must select a published, anonymously verified bare-SemVer
+version instead.
 
-Single-host container stacks work for both testing and simple commercial use,
-but configuration is more involved: you must understand the overall
-architecture and edit configuration files yourself, and there is no
-clustering, high availability or horizontal scaling. Two common combinations:
+> **Current full-suite boundary:** Forge does not yet have a complete public
+> installation channel. Its rolling channel contains backend/frontend images
+> only. No complete nine-chart/23-image Forge release or public Release
+> installer has been verified. On an empty cluster, stop after Horizon; do not
+> proceed to Link until a complete Forge release satisfies the installation
+> guide's gate. Link's verified chart does not remove that dependency.
 
-- **NereidLink + NereidEdge** — cloud-edge collaboration: the field gateway
-  reports into a single-host IoT platform.
-- **NereidHorizon + NereidEdge + NereidInference** — edge distribution and
-  model distribution: the distribution plane pushes services and model
-  packages to field gateways running inference.
+## Operator workspace
 
-Only a product's explicitly documented production Compose path is
-production-eligible; trial overrides and development compose files are not.
-The formal support matrix is the section below.
+Only NereidOverview is needed for the shared prerequisites and suite runbook.
+Product charts are pulled directly from GHCR; product source checkouts are not
+part of the installation procedure.
 
-### Scenario 3 — Full suite on Kubernetes: complete testing and commercial use
-
-Deploying every product under Kubernetes (k3s or a conformant cluster) via
-Helm unlocks the complete suite functionality — high availability,
-horizontal scaling and namespace-per-tenant multi-tenancy — and is the
-strongly recommended production form. The requirement is not only hardware
-and cluster infrastructure: the team needs real Kubernetes operational
-capability **and** AI engineering capability to run the model factory and
-edge loop. Follow the linear deployment chain in the
-[deployment guides](docs/deploy/README.md) (cluster bootstrap → shared
-prerequisites → products → verification); air-gapped sites use the same
-steps with image delivery handled per
-[deploy-standards §15.3](docs/deploy-standards.md).
-
-### Quick links
-
-| Goal | Go to |
-|---|---|
-| Cluster-shared prerequisites (cert-manager, NFS CSI, GPU/NPU plugins) | [`deploy/prereqs/`](deploy/prereqs/) |
-| Air-gapped delivery rules and tooling | [Deploy & delivery standards](docs/deploy-standards.md) §15.3, §15.10 |
-| Contribute a fix or improvement | [Contributing guide](CONTRIBUTING.md) |
-| Full product list and architecture overview | [NereidAI organization page](https://github.com/NereidAI) |
-
-## Deployment modes and support boundaries
-
-Every NereidAI product can be started in more than one way, but the run modes
-are not interchangeable. Their support levels are a suite-wide rule, restated
-in every product README and normalized in [deploy-standards §15.14](docs/deploy-standards.md):
-
-| Run mode | Typical entry point | Purpose | Production support |
-|---|---|---|---|
-| **Dev mode** | Host processes, `make dev`, `configs/dev.yaml`, Vite/dev servers | Day-to-day development and debugging only | **Not supported — never use for production** |
-| **Docker / Compose mode** | `docker compose`, single-host container stacks | Testing, demos, image verification and local evaluation; selected stacks also serve single-host, edge and air-gapped appliance deployments | **Partially supported** — only a product's explicitly documented production Compose path; no clustering, high availability or horizontal scaling |
-| **Kubernetes mode** | Helm charts on k3s/Kubernetes, per each product's own deployment docs | Full-featured production deployment | **Strongly recommended for production — full functionality** (HA, horizontal scaling, multi-tenancy) |
-
-Platform products (NereidIdentity, NereidSphere, NereidLink, NereidHorizon,
-NereidForge) follow this table; each product README names exactly which Compose
-assets, if any, are production-eligible (for example NereidHorizon's air-gapped
-production stack and NereidLink's Mode A/B edge stack) versus trial-only
-overrides. Edge products (NereidEdge, NereidInference) have no Kubernetes
-mode: their production form is the Open Horizon service definition delivered
-and managed by NereidHorizon, while their Compose stacks remain development and
-testing only. Dev mode must never be described or supported as a production
-installation; a Compose deployment may be, only when it follows the product's
-documented production path with its stated capability limits.
-
-## Workspace layout
-
-> **Full-suite deployment requires every NereidAI product repository cloned
-> locally** — products install from local sibling chart paths, not from a
-> remote chart repository. Clone the whole organization's repositories as
-> siblings under one directory:
->
-> ```bash
-> git clone https://github.com/NereidAI/NereidOverview.git
-> git clone https://github.com/NereidAI/NereidIdentity.git
-> # …repeat for every product in the organization
-> ```
+Keep site inputs outside every Git checkout:
 
 ```text
-nereid-workspace/
-├── .deployment/
-│   ├── deploy-values/  # site inputs and hand-offs, outside every Git repository
-│   └── deploy-logs/    # deployment and verification logs
-├── NereidOverview/     # you are here
-├── NereidIdentity/
-├── NereidLink/
-├── NereidSphere/
-├── NereidHorizon/
-├── NereidForge/
-├── NereidEdge/         # field gateway policy/guard process
-├── NereidInference/    # EdgeX device service: edge inference runtime
-└── …                   # every other NereidAI repository
+$HOME/.nereidai-deployment/
+├── deploy-values/   # values, credentials, keys, and generated hand-offs
+├── deploy-logs/     # deployment and acceptance records
+└── chart-archives/  # pulled packages used to initialize example values
 ```
 
-A single-product deployment needs only that one repository when the product
-is standalone-capable (see the Scenario 1 table). Actual site values,
-credentials, keys, licenses, and deployment logs live under `.deployment/`,
-not inside a product checkout; canonical charts, templates, and placeholder
-examples remain versioned with their products. The complete repository list is
-on the [organization page](https://github.com/NereidAI).
+Use restrictive directory and file permissions. Generate a unique secret for
+every required credential and never commit real domains, addresses, values, or
+hand-off files.
 
 ## What is in this repository
 
 | Path | Contents |
 |---|---|
-| `docs/` | Deployment runbooks, reference material, and the deployment/packaging/delivery standards |
-| [`deploy/prereqs/`](deploy/prereqs/) | Cluster-shared components: cert-manager, NFS CSI, GPU/NPU device plugins |
-| [`deploy/scripts/`](deploy/scripts/) | Air-gapped image mirroring tooling and its empty environment template |
+| [`docs/deploy/`](docs/deploy/) | Public cluster and suite installation runbooks |
+| [`docs/deploy-standards.md`](docs/deploy-standards.md) | Public artifact, publication, installation, and acceptance contracts |
+| [`deploy/prereqs/`](deploy/prereqs/) | cert-manager CA resources, NFS CSI, and GPU/NPU device plugins |
+
+## Edge delivery
+
+NereidEdge and NereidInference run at edge sites rather than as central k3s
+product charts. After Link is healthy, the operator manually:
+
+1. registers each edge host with Open Horizon;
+2. delivers the service Pattern and confirms the agreement and service health;
+3. configures NereidEdge with its own Link MQTT credentials and device map;
+4. verifies Link heartbeats and telemetry; and
+5. delivers and verifies each model through ESS independently.
+
+A service agreement does not prove model delivery.
 
 ## Contributing
 
-Contributions are welcome — runbook corrections, prerequisite manifests, and
-air-gapped tooling improvements all start here; product runtime changes go to
-the product's own repository. Every commit must carry a Developer Certificate
-of Origin sign-off, and every contribution is licensed under Apache-2.0. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the full rules, including copyright
-handling and the host-free requirements.
+Contributions to public runbooks, shared prerequisite manifests, and these
+standards start here; product runtime and chart changes belong in the product's
+own repository. Every commit must carry a Developer Certificate of Origin
+sign-off, and every contribution is licensed under Apache-2.0. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Repositories
 
-Each product has its own repository and release cycle; standalone
-suitability varies by role — see the Scenario 1 table above. The complete
-product list and descriptions live on the
-[organization page](https://github.com/NereidAI):
+The complete product list and architecture overview are on the
+[NereidAI organization page](https://github.com/NereidAI):
 [NereidIdentity](https://github.com/NereidAI/NereidIdentity) ·
-[NereidLink](https://github.com/NereidAI/NereidLink) ·
 [NereidSphere](https://github.com/NereidAI/NereidSphere) ·
 [NereidHorizon](https://github.com/NereidAI/NereidHorizon) ·
 [NereidForge](https://github.com/NereidAI/NereidForge) ·
+[NereidLink](https://github.com/NereidAI/NereidLink) ·
 [NereidEdge](https://github.com/NereidAI/NereidEdge) ·
 [NereidInference](https://github.com/NereidAI/NereidInference)
