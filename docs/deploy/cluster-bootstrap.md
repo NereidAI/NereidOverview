@@ -1,437 +1,467 @@
-# NereidAI Cluster Bootstrap Guide (from zero): Bare Metal → k3s → Rancher-managed
+# NereidAI Rancher + k3s Bootstrap and Acceptance
 
-- Date: 2026-10-19
-- Version anchors: Rancher **v2.15.0** (Docker single-container management server), k3s **v1.36.2+k3s1**,
-  rancher-system-agent **v0.15.0** (delivered by Rancher internally, not installed manually)
-- Verified environment: the Rancher container runs on `server1` (192.0.2.10); downstream cluster
-  name **nereidai**, 2 servers (embedded etcd HA), built on 2026-10-13 following this guide. Worker
-  nodes are optional and can be added whenever capacity requires (see §5.2)
-- Image registry: Harbor `<harbor-host>` (192.0.2.20, HTTPS, Let's Encrypt certificate)
-- This guide installs no NereidAI product. Hand-off:
+This guide prepares an **empty, Rancher-managed downstream k3s cluster** using public Internet
+services and official upstream sources. It does not install NereidAI products or the suite's shared
+prerequisites.
 
-  | Phase | Guide/Directory | Output |
-  |---|---|---|
-  | **-1 (this guide)** | `docs/deploy/cluster-bootstrap.md` | Rancher management server + a managed empty k3s cluster |
-  | 0 Cluster shared prerequisites | [`../../deploy/prereqs/`](../../deploy/prereqs/README.md) + [`install-suite.md`](install-suite.md) §4 | cert-manager/internal-ca, nfs-csi StorageClass, GPU device plugins |
-  | 1+ Suite products | [`install-suite.md`](install-suite.md) §6 onward | NereidIdentity / NereidSphere / NereidLink / NereidHorizon … |
+Choose one route:
 
-## 1. Target topology (lab reference)
+- **Existing cluster (preferred):** complete §2, verify the common prerequisites in §3, then run the
+  read-only acceptance checks in §6.
+- **From zero:** complete §3, optionally install Rancher and a downstream cluster with §4–§5, then
+  run §6.
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│ Management server (Docker; in the lab co-located on server1; production must separate, see §9) │
-│   rancher:v2.15.0 container  :28443(HTTPS) :28880(HTTP)         │
-│   Persistence /srv/rancher → container /var/lib/rancher (incl. embedded etcd) │
-└──────────────┬─────────────────────────────────────────────────┘
-               │ Registration command delivery /system-agent-install.sh + /assets (Rancher self-service)
-               │ Nodes only need access to 192.0.2.10:28443
-               ▼
-┌ Downstream k3s cluster nereidai (v1.36.2+k3s1, embedded etcd HA) ─────────┐
-│ server1   192.0.2.10  server(etcd/cp/worker)  cluster-init          │
-│ server2      192.0.2.11    server(etcd/cp/worker)                        │
-│ (+ optional worker nodes, added as capacity requires)                    │
-│ All nodes: --system-default-registry <harbor-host>                    │
-└──────────────────────────────────────────────────────────────────────────┘
+All commands below are instructions for the operator. Run them on the host named in the surrounding
+text. Replace every example name, address, path, and credential with an approved site value before
+running a command. The `example.org` names and `192.0.2.0/24` addresses in this guide are reserved
+examples, not a deployable site configuration.
+
+## 1. Scope, versions, and completion criteria
+
+The optional installation path uses these explicit pins:
+
+```bash
+RANCHER_VERSION=v2.15.3
+K3S_VERSION=v1.36.2+k3s1
 ```
 
-| Role | Hostname | IP | OS (live) | Notes |
-|---|---|---|---|---|
-| Management server + NFS + server1 | server1 | 192.0.2.10 | Ubuntu 26.04 LTS | Deployment host; needs docker-ce |
-| server2 | server2 | 192.0.2.11 | Ubuntu 24.04.5 LTS | |
+Both releases have official public release records:
 
-Worker nodes are optional. Add them with the worker registration command in §5.2 whenever the
-cluster needs more capacity; the minimum HA cluster is the two servers above.
+- [Rancher v2.15.3](https://github.com/rancher/rancher/releases/tag/v2.15.3)
+- [k3s v1.36.2+k3s1](https://github.com/k3s-io/k3s/releases/tag/v1.36.2%2Bk3s1)
 
-> Rancher v2.15 brings nodes under management using the **Cluster API (Turtles) Custom
-> (bring your own host)** flow: the UI generates a one-time registration command for each host;
-> the host runs `rancher-system-agent`, which pulls its plan from Rancher and installs/maintains
-> k3s using the `system-agent-installer-k3s` image on Harbor. **You do not run the k3s install
-> script manually, nor pass token/server parameters by hand.**
+The [Rancher v2.15.3 support matrix](https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/rancher-v2-15-3/)
+certifies k3s v1.36. Before installation, confirm that the Rancher cluster creation UI offers the
+exact k3s patch selected above. If it does not, stop and select a reviewed, compatible Rancher/k3s
+pair; do not silently substitute another version. These pins are not minimum versions and are **not**
+an instruction to upgrade an existing cluster.
 
-## 2. External prerequisites (this guide does not install them, only verifies)
+A bootstrap is complete when:
 
-1. **Harbor**: `<harbor-host>` (192.0.2.20) reachable, HTTPS certificate trusted. The
-   **`rancher` project must exist and be public (anonymous pull allowed)** — this is the key to
-   offline bootstrap: k3s system images and the Rancher agent are all pulled from
-   `<harbor-host>/rancher/...`, so no node needs registry credentials during bootstrap.
-   The image list is in Appendix §11; every image must be in place before creating the cluster.
-2. **NFS**: the lab uses local NFS on server1 (exported in §3.3); production uses independent storage.
-3. The **chart repository** (optional, air-gapped redistribution only; see
-   install-suite §9) is **not used** at this phase; it belongs to the next phase.
-4. All hosts can resolve/reach: `<harbor-host>:443`, the management server
-   `192.0.2.10:28443`, and NFS `192.0.2.10:2049`.
+1. Rancher shows the intended downstream cluster as **Active** and all expected machines as Ready.
+2. Every Kubernetes node is Ready and runs the recorded, supported k3s version.
+3. Core k3s services, the ingress controller, and Rancher agents are healthy.
+4. DNS, required network paths, time synchronization, and NFS client connectivity pass §3 and §6.
+5. No NereidAI product workload has been installed. k3s and Rancher system components are expected
+   and do not make the cluster non-empty.
 
-## 3. Host preparation (all nodes)
+## 2. Existing-cluster fast path
 
-### 3.1 OS, network, accounts
+Use this route when an empty k3s cluster is already managed by Rancher. Do not run the installation
+or registration steps in §4–§5.
 
-- Ubuntu 24.04 / 26.04 (live: two machines on 26.04, one on 24.04.5, all amd64); static IP; set
-  hostnames per the topology table.
-- Each node's `/etc/hosts` contains at least (use internal DNS when available):
+1. In **Rancher → Cluster Management**, confirm that:
+   - the selected cluster is the intended downstream cluster, not Rancher's own management cluster;
+   - its state is **Active**, with no provisioning, update, or error operation still running;
+   - all expected nodes are present and Ready; and
+   - its Kubernetes version is supported by the installed Rancher version and by the NereidAI suite
+     release being planned.
+2. Obtain a kubeconfig for that downstream cluster through Rancher. Use an account with only the
+   access needed for installation and acceptance; do not copy a node administrator configuration to
+   an operator workstation.
+3. On the operator workstation, select the downloaded configuration and confirm the context:
 
-  ```text
-  192.0.2.20  <harbor-host>
-  192.0.2.10  <management-server>
-  ```
+   ```bash
+   export KUBECONFIG="$HOME/.kube/nereidai.kubeconfig"
+   kubectl config current-context
+   kubectl get --raw='/healthz'
+   ```
 
-- The deployment host (server1) has SSH + passwordless sudo to the other nodes (for file
-  distribution and troubleshooting).
-- Time sync: confirm with `timedatectl` that an NTP service is active and the clock is
-  synchronized. etcd is clock-sensitive; unsynced clocks cause repeated warnings.
-- swap: recommended off in production (`swapoff -a` and comment out `/etc/fstab`). The live lab
-  keeps a 16G swapfile; measured usage is about 0 and the cluster runs fine — this is a lab
-  exception, not a recommended configuration.
-- All **downstream nodes** install the NFS client (CSI mounts need `mount.nfs`):
-  `sudo apt install -y nfs-common`.
+   The expected API health response is `ok`. Stop if the context names a different cluster.
+4. Review the namespaces in Rancher or with `kubectl get namespaces`. Account for every non-system
+   namespace. An empty target has no NereidAI product namespaces and no suite workloads; standard
+   k3s and Rancher namespaces are expected.
+5. Complete the applicable checks in §3, then go to §6. If the cluster fails a check, hand the
+   finding to the cluster owner rather than rebuilding or re-registering it as part of acceptance.
 
-### 3.2 Ports to open (when a firewall is enabled)
+## 3. Common prerequisites
 
-| Direction | Port | Purpose |
+### 3.1 Host identity, DNS, and TLS
+
+Use a Linux release supported by both Rancher and k3s. Each management and downstream node needs a
+unique hostname, stable addressing, sufficient disk and memory for its assigned role, and an
+administrator with SSH and `sudo` access. Size worker capacity separately for the intended suite
+products; the k3s minimums do not include application resources.
+
+Create and verify the site's DNS records before registration. This example topology shows only the
+required naming pattern:
+
+| Purpose | Example name | Example address |
 |---|---|---|
-| Nodes/browser → server1 | TCP 28443, 28880 | Rancher management UI/API (container mappings; non-standard live ports) |
-| Nodes → <harbor-host> | TCP 443 | Harbor image pulls |
-| server ↔ server | TCP 2379-2381 | Embedded etcd |
-| agent/worker → server | TCP 6443, 9345 | Kubernetes API, k3s supervisor |
-| Between nodes | UDP 8472 | Flannel VXLAN |
-| Between nodes | TCP 10250 | kubelet |
-| Node inbound | TCP 30000-32767 | NodePort (incl. MQTT 31883/31884) |
-| Nodes → NFS | TCP 2049 | NFSv4 |
+| Rancher endpoint | `rancher.example.org` | `192.0.2.10` |
+| Downstream server 1 | `server1.example.org` | `192.0.2.11` |
+| Downstream server 2 | `server2.example.org` | `192.0.2.12` |
+| Downstream server 3 | `server3.example.org` | `192.0.2.13` |
+| NFS service | `nfs.example.org` | `192.0.2.20` |
+| Future suite ingress | `apps.example.org` | `192.0.2.30` |
 
-In the live lab ufw is inactive on both hosts; production must converge per this table and must
-not rely on an "everything open on the internal network" assumption.
+The Rancher name must remain stable and resolve to the management endpoint from the operator
+workstation and every downstream node. Node names must resolve consistently between nodes. Plan the
+suite ingress records against the actual ingress external address; use the product naming in
+[`install-suite.md`](install-suite.md) when those records are created.
 
-### 3.3 NFS server (server1)
+Rancher HTTPS must use a certificate valid for its DNS name and trusted by downstream nodes. A
+browser certificate exception is not node trust. If a site CA must be added to a node's trust store,
+complete that change before registration and verify it without disabling TLS checks.
+
+Run these read-only checks on the operator workstation and each downstream node after setting the
+actual values:
 
 ```bash
-sudo apt install -y nfs-kernel-server
-sudo mkdir -p /data/nereidai
-echo '/data/nereidai *(rw,sync,no_subtree_check,no_root_squash)' | sudo tee -a /etc/exports
-sudo exportfs -arv
-sudo systemctl enable --now nfs-server
+RANCHER_HOST=rancher.example.org
+RANCHER_URL="https://${RANCHER_HOST}"
+NFS_SERVER=nfs.example.org
+
+getent hosts "$RANCHER_HOST"
+getent hosts "$NFS_SERVER"
+curl -fsS "${RANCHER_URL}/ping"
 ```
 
-Verify from another node: `sudo mount -t nfs 192.0.2.10:/data/nereidai /mnt && sudo umount /mnt`.
+The expected Rancher response is `pong`. Do not bypass certificate or hostname errors.
 
-> `/data/nereidai` is the suite-shared export (this phase only creates the directory; the nfs-csi
-> StorageClass is created in Phase 0, with subdirectories isolated automatically by the CSI as
-> `<namespace>-<pvc>`). The live site also has a Forge-specific `/data/nereidforge_share`, which
-> is unrelated to this guide. `no_root_squash` + world-writable suits a trusted lab only;
-> production should narrow the source network and use a squash policy.
+### 3.2 Time synchronization
 
-### 3.4 Install Docker on the management server (server1 only)
+Use reliable, consistently reachable time sources on the Rancher host, every downstream node, and
+the NFS server. Correct clock synchronization is required for TLS, Kubernetes certificates, and
+etcd.
 
-Live version: docker-ce 29.5.3 (Docker official apt repository, Ubuntu 26.04 package). Install
-docker-ce / containerd.io from the official Docker repository; for an offline environment,
-prepare the deb set in advance with `apt-get download`.
-
-Pre-pull the Rancher image (the `rancher` project is public, no docker login needed; offline,
-`docker save` on an internet-connected machine then `docker load`):
+Run on every host:
 
 ```bash
-sudo docker pull <harbor-host>/rancher/rancher:v2.15.0
+timedatectl status
+timedatectl show --property=NTPSynchronized --value
 ```
 
-## 4. Start the Rancher management server
+The second command must return `yes`. Investigate clock offset or an inactive synchronization source
+before proceeding; matching time-zone labels alone do not prove synchronization.
 
-### 4.1 Start the container (official image, stock entrypoint)
+### 3.3 Firewall and public egress
+
+Permit only the flows required by the selected architecture. The table assumes embedded etcd,
+Flannel VXLAN, and the default k3s ingress/service load balancer.
+
+| Source → destination | Protocol/port | Purpose |
+|---|---|---|
+| Operator and downstream nodes → Rancher | TCP 443 | UI, API, registration, and agent connections |
+| Agents → downstream server nodes | TCP 6443 | Kubernetes API and k3s supervisor |
+| Server ↔ server | TCP 2379–2380 | Embedded etcd; required for an HA server group |
+| All downstream nodes ↔ all downstream nodes | UDP 8472 | Flannel VXLAN |
+| All downstream nodes ↔ all downstream nodes | TCP 10250 | Kubelet API and metrics |
+| Intended clients → ingress endpoint | TCP 80, 443 | Suite HTTP/HTTPS access when products are installed |
+| Downstream nodes → NFS server | TCP 2049 | NFSv4 |
+| Hosts → approved DNS resolvers | UDP/TCP 53 | Name resolution |
+| Hosts → approved time sources | UDP 123 | Time synchronization |
+| Rancher host and downstream nodes → required public services | TCP 443 | Operating-system packages and upstream container images |
+
+Do not expose etcd, VXLAN, or NFS to the public Internet. Restrict every rule to its actual source
+network. If the existing cluster uses another CNI, ingress design, or datastore, obtain its port
+requirements from the cluster owner instead of applying the example rules unchanged.
+
+The optional installation path pulls `docker.io/rancher/rancher` and Rancher-selected public k3s
+images. Permit Docker Hub, its authentication and content-delivery endpoints, the operating system's
+official repositories, and any documented redirects. CDN addresses can change, so use the service
+names published by the provider rather than fixed resolved addresses.
+
+These read-only requests test two public endpoints from the Rancher host:
 
 ```bash
-sudo mkdir -p /srv/rancher
-sudo docker run -d --name rancher --restart=unless-stopped --privileged \
-  -p 28443:443 -p 28880:80 \
+curl -sS -o /dev/null -w 'Docker Hub API HTTP %{http_code}\n' \
+  https://registry-1.docker.io/v2/
+curl -fsS -o /dev/null \
+  https://github.com/rancher/rancher/releases/tag/v2.15.3
+```
+
+An HTTP `401` from the Docker Hub API confirms network and TLS reachability; it is the expected
+unauthenticated registry API response, not a failed image pull.
+
+For the authoritative network requirements, see the
+[Rancher port requirements](https://ranchermanager.docs.rancher.com/v2.15/getting-started/installation-and-upgrade/installation-requirements/port-requirements)
+and [k3s requirements](https://docs.k3s.io/installation/requirements).
+
+### 3.4 NFS service and clients
+
+The storage owner must provide an existing NFSv4 service and export for the suite. Record its real
+values in place of these examples:
+
+```bash
+NFS_SERVER=nfs.example.org
+NFS_EXPORT=/srv/nfs/nereidai
+```
+
+Before handoff, confirm that:
+
+- the export exists, has an approved access-control and quota policy, and permits the intended suite
+  workloads to use it;
+- every downstream node can resolve the NFS service and reach TCP 2049; and
+- every downstream node has the operating system's NFS client utilities, including `mount.nfs`.
+
+The following checks are read-only. Run them on every downstream node:
+
+```bash
+getent hosts "$NFS_SERVER"
+command -v mount.nfs
+timeout 5 bash -c "</dev/tcp/${NFS_SERVER}/2049"
+```
+
+The last command must return status `0`. Export permissions and dynamic provisioning still require a
+write-capable test; that test belongs to the shared-storage installation in the next phase, not to
+this read-only bootstrap acceptance.
+
+## 4. Optional from-zero path: install Rancher
+
+> Skip this section and §5 when using the existing-cluster fast path.
+>
+> The following single-container management endpoint is a minimal, non-HA installation. Rancher's
+> supported production form is a separate three-node management cluster installed with Helm. For
+> production, follow the official
+> [Kubernetes/Helm installation](https://ranchermanager.docs.rancher.com/v2.15/getting-started/installation-and-upgrade/install-upgrade-on-a-kubernetes-cluster),
+> then continue at §5. Do not place the management endpoint on a downstream workload node.
+
+### 4.1 Prepare the management host and downstream nodes
+
+Use a dedicated Linux management host with Docker Engine installed from
+[Docker's official repository](https://docs.docker.com/engine/install/). The management host and all
+downstream nodes need the DNS, time, firewall, and public-egress configuration in §3.
+
+Obtain a publicly trusted certificate and private key for the real replacement for
+`rancher.example.org`. Make the full certificate chain and key available on the management host as
+`/srv/rancher-tls/fullchain.pem` and `/srv/rancher-tls/privkey.pem`, readable only by the
+administrator and the Rancher container.
+
+Set the installation values on the management host:
+
+```bash
+RANCHER_VERSION=v2.15.3
+K3S_VERSION=v1.36.2+k3s1
+RANCHER_HOST=rancher.example.org
+RANCHER_URL="https://${RANCHER_HOST}"
+
+sudo docker version
+sudo test -r /srv/rancher-tls/fullchain.pem
+sudo test -r /srv/rancher-tls/privkey.pem
+```
+
+On each new Debian or Ubuntu downstream node, install the registration and NFS client utilities from
+the operating system's public repositories. For another supported Linux distribution, install the
+corresponding packages with its native package manager.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl nfs-common
+```
+
+### 4.2 Start and initialize Rancher
+
+Run on the management host:
+
+```bash
+sudo install -d -m 0750 /srv/rancher
+sudo docker pull "docker.io/rancher/rancher:${RANCHER_VERSION}"
+
+sudo docker run -d \
+  --name rancher \
+  --restart=unless-stopped \
+  --privileged \
+  -p 443:443 \
   -v /srv/rancher:/var/lib/rancher \
-  -e TZ=Asia/Shanghai \
-  <harbor-host>/rancher/rancher:v2.15.0
+  -v /srv/rancher-tls/fullchain.pem:/etc/rancher/ssl/cert.pem:ro \
+  -v /srv/rancher-tls/privkey.pem:/etc/rancher/ssl/key.pem:ro \
+  "docker.io/rancher/rancher:${RANCHER_VERSION}" \
+  --no-cacerts
 ```
 
-Key points:
+`--privileged` is required by Rancher's containerized management cluster. `/srv/rancher` contains
+management state and must be included in the site's backup procedure. Use the official Rancher
+backup and upgrade procedure for later lifecycle operations.
 
-- **`--privileged` is required**: the Docker form of Rancher runs an embedded k3s (the local
-  management cluster) inside the container.
-- `/srv/rancher` is the only volume that must persist; it holds management state and the embedded
-  etcd (about 3.7G live). If the container is deleted/upgraded but this directory is kept,
-  management state is not lost.
-- Use the **official stock entrypoint**; do not bind-mount a custom entrypoint (repair scripts are
-  for troubleshooting only, see §10.4).
-- Wait for readiness (about 1-2 minutes):
-
-  ```bash
-  curl -sk https://192.0.2.10:28443/ping   # returns pong
-  sudo docker logs -f rancher                  # shows Listening on :443
-  ```
-
-### 4.2 First boot
-
-1. Open `https://192.0.2.10:28443` in a browser (self-signed certificate; the trust warning is
-   expected — the cert is the Rancher dynamic-listener self-signed CA, valid for 10 years).
-2. Set the `admin` bootstrap password (a one-time opportunity on first login; if lost, follow the
-   official Rancher password-reset procedure).
-3. Confirm **Server URL = `https://192.0.2.10:28443`**: this is where every downstream agent
-   dials back, and it **must be confirmed before creating a downstream cluster** — changing the
-   URL after the cluster exists requires re-managing it. Do not use the browser's
-   localhost/127.0.0.1.
-
-### 4.3 Set the global default registry (required before creating the cluster)
-
-In the Rancher UI: **Global Settings → system-default-registry**, set it to:
-
-```text
-<harbor-host>
-```
-
-This single setting affects both:
-
-- The `/etc/rancher/k3s/config.yaml.d/50-rancher.yaml` rendered on every downstream node carries
-  `--system-default-registry <harbor-host>`, so system images (pause/coredns/traefik/metrics)
-  are all pulled from `<harbor-host>/rancher/...`;
-- Components subsequently deployed into Rancher's local cluster (fleet / turtles / webhook) also
-  go through this registry.
-
-Live verification: both node k3s arguments and the crictl image list show
-`<harbor-host>/rancher/*`, with no docker.io pulls.
-
-## 5. Create the downstream k3s cluster nereidai
-
-### 5.1 Create the cluster in Rancher (Custom / bring your own host)
-
-Cluster Management → Create → **Custom** (bring your own host; Cluster API custom-host flow):
-
-| Setting | Value | Notes |
-|---|---|---|
-| Cluster name | `nereidai` | Written into the node label `plan.cattle.io/cluster-name` on every node |
-| Kubernetes Version | **v1.36.2+k3s1** | The Rancher v2.15.0 image defaults to v1.36.1+k3s1; the live standard is pinned to v1.36.2, so select it explicitly in the dropdown |
-| Ingress controller | traefik | k3s default; the product guides depend on it |
-| etcd snapshot schedule | `0 */5 * * *` | Live value: local snapshot every 5 hours |
-| etcd snapshot retention | `5` | |
-| Networking | default (Flannel VXLAN) | |
-
-First create the cluster object (no hosts yet; it waits for registration).
-
-### 5.2 Register hosts one at a time
-
-After the cluster is created, the UI generates **a one-time registration command per host** (the
-token is one per host; to re-register or retry after failure, regenerate the command to get a new
-token). Command shape (token/ca-checksum as generated by the UI):
+Wait for startup, then run these read-only checks:
 
 ```bash
-# Server nodes (run once each on server1 and server2, each with its own generated command)
-curl --insecure -fL https://192.0.2.10:28443/system-agent-install.sh | \
-  sudo sh -s - --server https://192.0.2.10:28443 \
-  --label 'cattle.io/os=linux' \
-  --token <one-time-token-for-this-host> \
-  --ca-checksum <CA-SHA256-from-UI> \
-  --etcd --controlplane --worker
-
-# Optional worker node (run on each additional worker host; generate a fresh
-# one-time command per host — future workers use the same shape)
-curl --insecure -fL https://192.0.2.10:28443/system-agent-install.sh | \
-  sudo sh -s - --server https://192.0.2.10:28443 \
-  --label 'cattle.io/os=linux' \
-  --token <one-time-token-for-this-host> \
-  --ca-checksum <same-as-above> \
-  --worker
+sudo docker logs --tail 100 rancher
+curl -fsS "${RANCHER_URL}/ping"
 ```
 
-Order and observation points:
+The endpoint must return `pong` without any TLS bypass option.
 
-1. **server1 first**: it is the `--cluster-init` node (the plan decides this automatically; no
-   manual flag needed). The `rancher-system-agent.service` appears on the host; the plan pulls
-   `<harbor-host>/rancher/system-agent-installer-k3s:v1.36.2-k3s1` to install k3s. Wait in the
-   Rancher UI until the first server is Ready (about 3-5 minutes).
-2. **server2 next**: the plan joins it automatically as a second server into the same embedded etcd
-   (2 voters). This completes the minimum HA cluster.
-3. **(Optional) Add workers**: for each additional worker host, generate a fresh command and run it
-   with `--worker` — a pure agent, no etcd/control-plane role.
-4. The install script and the system-agent binary are both self-served by the Rancher container
-   (`/system-agent-install.sh`, `/assets/...`, verified 200 live); nodes need **no public internet
-   during registration**, only network access to Rancher and Harbor.
+In a browser:
 
-Troubleshooting entry points on a node:
+1. Open the real `RANCHER_URL` and follow Rancher's initial bootstrap-password procedure. Set a
+   unique administrator password and store recovery details in the site's approved secret store.
+2. Confirm that the Rancher **Server URL** is exactly the stable HTTPS DNS URL used above. Do not use
+   a node address, `localhost`, or an address reachable only from the browser.
+3. Record the Rancher and k3s pins, certificate owner/expiry, and management-state backup location in
+   the site change record.
 
-```bash
-sudo systemctl status rancher-system-agent
-sudo journalctl -u rancher-system-agent -f
-sudo ls /var/lib/rancher/agent/applied/      # applied plans (incl. rendered k3s config)
-```
+The full upstream command variants are documented in
+[Installing Rancher on a Single Node Using Docker](https://ranchermanager.docs.rancher.com/v2.15/getting-started/installation-and-upgrade/other-installation-methods/rancher-on-a-single-node-with-docker).
 
-### 5.3 Private registry authentication (live projects are public; normally skippable)
+## 5. Optional from-zero path: create the downstream k3s cluster
 
-Live, the `rancher` / `nereidai` / `nereidforge` Harbor projects are all **public**, so bootstrap
-and system images pull anonymously and **cluster bootstrap needs no** registries auth file. If a
-site's Harbor projects are private, choose one of:
+### 5.1 Create the cluster object
 
-- **Recommended**: in the cluster-creation wizard's Registries settings, fill in the mirror and
-  credentials for `<harbor-host>`; Rancher renders them into each host's plan (managed with the
-  cluster lifecycle; rebuilt nodes pick them up automatically).
-- **Manual (adopted live later)**: place `/etc/rancher/k3s/registries.yaml` on every node:
+In **Rancher → Cluster Management → Create → Custom**, create a Rancher-provisioned k3s cluster with:
 
-  ```yaml
-  mirrors:
-    <harbor-host>:
-      endpoint:
-        - "https://<harbor-host>"
-  configs:
-    <harbor-host>:
-      auth:
-        username: admin
-        password: "<harbor-password>"
-  ```
-
-  Note: this path is also managed by the Rancher plan (when the plan's config is empty it writes
-  `{"configs":{},"mirrors":null}`), so cluster reconfiguration/node rebuild can overwrite the
-  manual file and it must be replaced. The long-term approach is the first one (in-wizard config).
-  Product-image mirror rewrites (docker.io/ghcr.io/quay.io/... to the internal registry) are
-  rendered separately by `deploy/scripts/harbor-sync.sh node-mirror --apply` (deploy-standards §15.3).
-
-## 6. Acceptance
-
-On any server node (live, from server1):
-
-```bash
-sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get nodes -o wide
-# Expected: server1/server2 both have role control-plane,etcd,worker (plus any optional workers with role worker); version v1.36.2+k3s1
-
-sudo env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -A | grep -E 'cattle|fleet'
-# cattle-cluster-agent(2), rancher-webhook, fleet-agent, system-upgrade-controller Running
-
-sudo k3s crictl images | grep <harbor-host>/rancher
-# System images all come from Harbor (cross-check against the Appendix §11 list)
-
-sudo ls /var/lib/rancher/k3s/server/db/snapshots    # etcd local snapshots appear on servers
-```
-
-In the Rancher UI the cluster `nereidai` is **Active**, and the Machine Inventory shows all three
-hosts Present/Ready.
-
-kubeconfig: on a server node it is `/etc/rancher/k3s/k3s.yaml` (root-readable); sudo drops
-KUBECONFIG, so consistently use
-`sudo env HOME=/root KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl ...`. For distribution, prefer
-downloading a read-only kubeconfig from the Rancher UI over copying the superuser config off a
-server.
-
-## 7. Backup
-
-| Object | Backup method | Recovery notes |
-|---|---|---|
-| Rancher management state | After `docker stop rancher`, archive `/srv/rancher` (holds embedded etcd/management-state) | Restart with the same image mounting this directory; note the entrypoint issue in §10.4 for recovery scenarios |
-| Downstream etcd | Rancher takes scheduled snapshots automatically (`0 */5 * * *`, retention 5), stored locally on servers at `/var/lib/rancher/k3s/server/db/snapshots`; trigger/restore from the Rancher UI | **Prefer the Rancher UI/snapshot restore flow**; do not run k3s etcd-snapshot subcommands manually on managed nodes |
-
-## 8. Node rebuild / re-management
-
-When a host must be reinstalled or a failed registration retried, run on that host (live historical
-commands; note these wipe local k3s data):
-
-```bash
-sudo rancher-system-agent-uninstall.sh
-sudo /usr/local/bin/k3s-uninstall.sh         # server nodes
-# The worker-node equivalent is /usr/local/bin/k3s-agent-uninstall.sh
-sudo rm -rf /etc/rancher /var/lib/rancher
-```
-
-Then regenerate a registration command for that host in the Rancher UI and run it. Delete the old
-Machine record in the UI to avoid duplicate machine objects.
-
-## 9. Production form (deltas from the lab)
-
-1. **Independent management server**: the Docker single container (embedded single-node etcd) is
-   for lab/POC only. Production uses a dedicated management cluster (an independent 3-node k3s +
-   Rancher installed via Helm, HA), physically separate from the downstream business cluster; the
-   Server URL points at a stable DNS + load balancer (not a single business node's IP).
-2. **Downstream control plane**: an odd number of 3/5 servers, etcd deployed independently on
-   control-plane nodes with separate workers; 10GbE/low-latency interconnect.
-3. **Storage**: NFS is for shared artifacts/exports only; hot databases use block storage/local
-   disks (see the product deployment guide §2).
-4. **Network**: default-deny NetworkPolicy; converge the firewall per the §3.2 port table; switch
-   Harbor projects to private with per-node/per-namespace credentials; narrow NFS sources and
-   remove no_root_squash.
-5. **Fully offline**: stage images per Appendix §11; Rancher nodes and downstream nodes have no
-   public-internet dependency throughout (the registration script and agent binary are
-   self-served by Rancher; system images go through Harbor).
-
-## 10. Troubleshooting
-
-### 10.1 A node never appears / the agent will not start
-
-- Verify the server URL and token in the command (one-time; regenerating invalidates the old
-  token) and the ca-checksum.
-- `journalctl -u rancher-system-agent`; TCP from the agent to `https://192.0.2.10:28443`
-  must work.
-- Stuck pulling `system-agent-installer-k3s`: check node access to 443/Harbor and whether the
-  `rancher` project images are all present (§11).
-
-### 10.2 System images fall back to docker.io
-
-This means system-default-registry did not take effect: check Rancher Global Settings (§4.3) and
-whether the node's `/etc/rancher/k3s/config.yaml.d/50-rancher.yaml` contains
-`system-default-registry: <harbor-host>`. That file is rendered by the plan — do not edit it by
-hand; change the setting and have Rancher re-deliver the plan.
-
-### 10.3 etcd clock/snapshot anomalies
-
-First check `timedatectl` (NTP sync) and server-to-server 2379/2381 connectivity; under 3-node HA
-snapshots land locally on schedule, and recovery always goes through the Rancher UI.
-
-### 10.4 Rancher container crashloops after reusing old data (cluster-reset)
-
-Live experience: when restoring/reusing the `/srv/rancher` data directory, the Rancher **stock
-entrypoint** may run `k3s server --cluster-reset` a second time, and k3s refuses a second reset,
-crashlooping the container (the live management container was rebuilt for this reason). The
-on-site workaround was to bind-mount an entrypoint script that only runs reset when a `reset-flag`
-exists (live on server1: `/data/rancher/entrypoint.sh`, for reference only — not part of the
-standard install). A fresh install never triggers this; for a formal recovery follow the official
-Rancher backup/restore flow and do not directly reuse a data directory in an unknown state.
-
-## 11. Appendix: offline image list (verified live 2026-10-19)
-
-### 11.1 Management server (Docker)
-
-| Image | Purpose |
+| Setting | Required value |
 |---|---|
-| `<harbor-host>/rancher/rancher:v2.15.0` | The Rancher container itself (images needed by its embedded local k3s are packaged inside the image) |
+| Cluster name | `nereidai` |
+| Kubernetes version | Exactly the reviewed `K3S_VERSION`; `v1.36.2+k3s1` for the documented pin |
+| Datastore | Embedded etcd; use three server nodes for HA |
+| CNI | Flannel VXLAN, unless the site has reviewed another design and its firewall rules |
+| Ingress controller | Traefik, enabled |
+| Cloud/provider workloads | None required by this guide |
 
-### 11.2 Rancher local management cluster components (pulled from Harbor after setting system-default-registry)
+Keep the default public upstream image coordinates supplied by Rancher and k3s. Configure etcd
+snapshots and their protected backup destination according to site policy before production use.
+Do not install suite shared components or product applications during cluster creation.
 
-| Image | Live tag |
-|---|---|
-| `rancher/rancher-agent` | v2.15.0 |
-| `rancher/rancher-webhook` | v0.11.0 |
-| `rancher/fleet` / `rancher/fleet-agent` | v0.16.0 |
-| `rancher/turtles` | v0.27.0 |
-| `rancher/cluster-api-controller` | v1.13.3 |
-| `rancher/remotedialer-proxy` | v0.8.0 |
-| `rancher/system-upgrade-controller` | v0.20.1 |
+### 5.2 Register nodes
 
-### 11.3 Downstream k3s v1.36.2 cluster (measured on nodes via crictl)
+On the cluster's **Registration** tab:
 
-| Image | tag | Purpose |
-|---|---|---|
-| `rancher/system-agent-installer-k3s` | v1.36.2-k3s1 | Vehicle for plan-driven k3s install/upgrade (contains the k3s binary) |
-| `rancher/system-agent` | v0.15.0-suc | system-upgrade-controller upgrades the agent |
-| `rancher/rancher-agent` | v2.15.0 | cattle-cluster-agent |
-| `rancher/rancher-webhook` | v0.11.0 | |
-| `rancher/fleet-agent` | v0.16.0 | |
-| `rancher/system-upgrade-controller` | v0.20.1 | |
-| `rancher/mirrored-pause` | 3.6 | sandbox |
-| `rancher/mirrored-coredns-coredns` | 1.14.4 | DNS |
-| `rancher/mirrored-library-traefik` | 3.7.4 | Ingress |
-| `rancher/mirrored-library-busybox` | 1.37.0 | helm chart helper container |
-| `rancher/mirrored-metrics-server` | v0.8.1 | |
-| `rancher/klipper-lb` | v0.4.17 | ServiceLB |
-| `rancher/klipper-helm` | v0.11.1-build20260615 | Managed chart jobs |
-| `rancher/local-path-provisioner` | v0.0.36 | local-path StorageClass |
+1. Select **etcd**, **control plane**, and **worker** for the first server. Copy the registration
+   command generated by Rancher and run it on `server1`. Wait until that machine and the cluster
+   become Ready.
+2. Generate and run a fresh command with the same roles on `server2`, wait for Ready, and repeat on
+   `server3`. Use each command only on its intended host and only while its registration token is
+   valid.
+3. Add worker-only nodes when additional capacity is required. Select only **worker** in Rancher
+   and use a newly generated command for each worker.
+4. Use the command exactly as generated for the selected Rancher version. Do not add an insecure TLS
+   option or replace the stable Rancher DNS name with an IP address.
 
-> These tags are the combination Rancher v2.15.0 actually selects when rendering the plan for
-> v1.36.2+k3s1 (cross-checked live on the nodes' crictl and Harbor). After upgrading
-> the Rancher/k3s version, the image-tag combination follows the new plan — do not pre-push images
-> from an old list.
+Rancher's system agent installs and maintains k3s; do not run a separate k3s installer on these
+nodes. The nodes need outbound access to Rancher and the public image sources in §3.3.
 
-Mirror command pattern from an internet-connected machine (the `rancher` project must exist first):
+If registration stalls, collect only read-only diagnostics on the affected node:
 
 ```bash
-skopeo copy --all docker://docker.io/rancher/mirrored-pause:3.6 \
-  docker://<harbor-host>/rancher/mirrored-pause:3.6
-# Same pattern for the rest; copy tags exactly as listed above
+sudo systemctl status rancher-system-agent --no-pager
+sudo journalctl -u rancher-system-agent --since '-15 min' --no-pager
 ```
 
-After the cluster is ready, the next step is [`../../deploy/prereqs/`](../../deploy/prereqs/README.md)
-(cert-manager, nfs-csi, GPU device plugins) and [`install-suite.md`](install-suite.md) §4.
+Check DNS, certificate trust, time synchronization, token validity, TCP 443 to Rancher, and public
+image egress before asking the cluster owner for a new registration command.
+
+When Rancher reports the cluster Active and all machines Ready, download its downstream kubeconfig
+and continue with acceptance.
+
+## 6. Read-only acceptance
+
+These checks do not create, patch, delete, drain, upgrade, or restart anything. Run the Kubernetes
+commands against the **downstream** cluster from the operator workstation:
+
+```bash
+export KUBECONFIG="$HOME/.kube/nereidai.kubeconfig"
+kubectl config current-context
+```
+
+### 6.1 API, versions, and nodes
+
+```bash
+kubectl get --raw='/healthz'
+kubectl get --raw='/readyz'
+kubectl version --output=yaml
+kubectl get nodes -o wide
+kubectl get nodes \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\t"}{.status.nodeInfo.kubeletVersion}{"\n"}{end}'
+```
+
+Accept only when both API responses are successful, every node reports `True`, and all expected roles
+and addresses are present. For a new cluster built with §4–§5, every server version must equal the
+selected k3s pin. For an existing cluster, record the actual version and verify its support status;
+do not upgrade it during acceptance.
+
+On every downstream node, repeat the external checks:
+
+```bash
+RANCHER_HOST=rancher.example.org
+RANCHER_URL="https://${RANCHER_HOST}"
+NFS_SERVER=nfs.example.org
+
+getent hosts "$RANCHER_HOST" "$NFS_SERVER"
+curl -fsS "${RANCHER_URL}/ping"
+timedatectl show --property=NTPSynchronized --value
+command -v mount.nfs
+timeout 5 bash -c "</dev/tcp/${NFS_SERVER}/2049"
+```
+
+Expect `pong`, `yes`, a path to `mount.nfs`, and status `0` from the TCP check.
+
+### 6.2 System workloads and Rancher management
+
+```bash
+kubectl get pods -A -o wide
+kubectl get pods -A \
+  --field-selector=status.phase!=Running,status.phase!=Succeeded
+kubectl get deployments -A \
+  -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas'
+kubectl get daemonsets -A
+kubectl -n cattle-system get deployments,pods
+kubectl -n fleet-system get deployments,pods
+```
+
+All long-running pods must be Running and Ready. Completed system jobs are acceptable; Pending,
+Failed, crash-looping, or image-pull-failing pods are not. Deployment available replicas must equal
+desired replicas, and DaemonSet ready instances must equal desired instances. The Rancher cluster
+agent and the agent components installed by the site's Rancher version must be healthy.
+
+In the Rancher UI, confirm once more that the downstream cluster is **Active**, its Machine Inventory
+is Ready, and no operation remains in progress.
+
+### 6.3 DNS and ingress readiness
+
+```bash
+kubectl -n kube-system get deployments coredns metrics-server traefik
+kubectl -n kube-system get service kube-dns traefik
+kubectl -n kube-system get endpoints kube-dns
+kubectl get ingressclasses
+```
+
+CoreDNS, metrics-server, and Traefik must be Available, and `kube-dns` must have ready endpoints.
+The `traefik` IngressClass must exist unless the cluster owner has explicitly supplied a suite-
+compatible alternative. Record the Traefik service's external address or the address of the external
+load balancer that fronts it; future suite DNS records must target that ingress path. An empty
+`EXTERNAL-IP` is a handoff blocker until the site's ingress design explains how traffic arrives.
+
+No diagnostic pod is needed for this acceptance. Application-level DNS and HTTPS checks occur after
+the shared prerequisites and product ingresses are installed.
+
+### 6.4 Empty-cluster boundary and storage starting point
+
+```bash
+kubectl get namespaces
+kubectl get storageclasses
+```
+
+Verify that there are no NereidAI product namespaces or workloads. The default k3s `local-path`
+StorageClass is expected; the suite's `nfs-csi` StorageClass is installed in the next phase rather
+than pre-created here. Record the NFS server and export from §3.4 and the successful client/network
+checks from §6.1.
+
+Do not create a test namespace, pod, PVC, or Service as part of this acceptance.
+
+## 7. Handoff to suite installation
+
+Record the following in the deployment change record:
+
+- Rancher URL and downstream cluster name;
+- actual Rancher and k3s versions;
+- node names, roles, and Ready status;
+- IngressClass and the external ingress address;
+- actual pod/service CIDRs and any site network exceptions;
+- NFS server/export and the storage owner's approval;
+- kubeconfig owner/location and acceptance output, including any explained exceptions.
+
+Then proceed in this order:
+
+1. **Cluster-shared prerequisites:** follow
+   [`../../deploy/prereqs/README.md`](../../deploy/prereqs/README.md) together with
+   [`install-suite.md`](install-suite.md) §4. Install and verify cert-manager with `internal-ca`,
+   the `nfs-csi` StorageClass, and only the device plugins required by the available hardware.
+2. **Suite products:** after all shared-prerequisite checks pass, continue with
+   [`install-suite.md`](install-suite.md) §§1–3 for versions and site inputs, then §5 onward for
+   product installation.
+
+The cluster owner retains responsibility for Rancher/k3s upgrades, etcd and management-state backups,
+node lifecycle, certificate renewal, and capacity changes. Product installation must not silently
+change those cluster-level controls.

@@ -1,26 +1,25 @@
 # Contributing to NereidOverview
 
-Thank you for your interest in NereidAI. This repository is the suite's
-source-code entry point: it holds the deployment runbooks, the deployment
-standards, the cluster-shared prerequisite components, and the air-gapped
-delivery tooling. It contains **no product runtime code** — feature changes to
-a product itself belong in that product's own repository.
+Thank you for your interest in NereidAI. This repository holds the public
+installation runbooks, deployment standards, and cluster-shared prerequisite
+components. It contains **no product runtime code** — feature changes to a
+product itself belong in that product's own repository.
 
 Typical contributions here are:
 
 - corrections and clarifications to the deployment runbooks and reference docs;
 - fixes to the cluster-shared manifests under `deploy/prereqs/`;
-- improvements to the air-gapped tooling under `deploy/scripts/`;
+- improvements to public OCI installation and verification guidance; and
 - improvements to this guide, the README, or the deployment standards.
 
 ## Repository-specific rules
 
 - **English only.** Every committed document and code comment is written in
-  English (see [deploy-standards §15.6](docs/deploy-standards.md)).
+  English (see [deploy-standards §15.8](docs/deploy-standards.md#158-documentation-and-acceptance)).
 - **Host-free by design.** Never commit internal hostnames, real DNS names,
-  lab IP addresses, credentials, tokens, or private registry coordinates. Use
+  lab IP addresses, credentials, tokens, or non-public artifact coordinates. Use
   the reserved documentation domains and networks instead — for example
-  `*.example` (RFC 2606), addresses in `192.0.2.0/24` (RFC 5737), and
+  `*.example.org` (RFC 2606), addresses in `192.0.2.0/24` (RFC 5737), and
   `<placeholder>` values. Secrets have no place in the repository, even in
   examples or command history.
 - **One install path per component.** Shared prerequisites are installed only
@@ -112,9 +111,9 @@ and the DCO workflow skips bot authors.
 ## Reporting problems
 
 Open a GitHub issue with the steps to reproduce, the expected and actual
-behavior, and the relevant environment (k3s/Kubernetes version, host OS,
-deployment mode). Never paste secrets, full credentials, or private registry
-hostnames into an issue.
+behavior, and the relevant environment (k3s/Kubernetes version, host OS, and
+selected artifact versions). Never paste secrets, full credentials, real site
+domains, or internal hostnames into an issue.
 
 ## License
 

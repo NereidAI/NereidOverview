@@ -1,600 +1,263 @@
-# NereidAI Suite Installation Guide (k3s + Rancher)
+# NereidAI Public Suite Installation Guide (k3s + Rancher)
 
-> **Prerequisite**: a Rancher-managed k3s cluster built per
-> [`cluster-bootstrap.md`](cluster-bootstrap.md). This guide starts from that
-> ready, empty cluster.
->
-> **Principle**: every layer is installed manually in order with human
-> confirmation. Products install from **local sibling chart paths**
-> (deploy-standards §15.5), never from a hand-maintained chart fork.
->
-> **Scope**: this guide contains the full commands for shared prerequisites and
-> the four core products. NereidForge (Kubeflow stack) and the field gateways
-> are deployed from their own repositories — this guide gives only the order,
-> preflight checks, and pointers (§7).
+Start with a ready, empty, Rancher-managed k3s cluster from
+[`cluster-bootstrap.md`](cluster-bootstrap.md). Every phase is executed manually
+by the operator and accepted before the next phase starts.
 
-## Table of contents
+Products install directly from versioned public GHCR OCI charts. No product
+source checkout is needed. NereidOverview supplies the shared prerequisite
+manifests and this runbook; product repositories remain the chart sources of
+truth.
 
-1. [Workspace layout](#1-workspace-layout)
-2. [Image delivery and registries](#2-image-delivery-and-registries)
-3. [Cluster preparation](#3-cluster-preparation)
-4. [Phase 0 — shared prerequisites](#4-phase-0--shared-prerequisites)
-5. [Prepare product values](#5-prepare-product-values)
-6. [Phase 1 — core products](#6-phase-1--core-products)
-7. [Phase 1b — Forge, Link and field gateways](#7-phase-1b--forge-link-and-field-gateways)
-8. [Phase 2 — end-to-end verification](#8-phase-2--end-to-end-verification)
-9. [ChartMuseum (optional, air-gapped only)](#9-chartmuseum-optional-air-gapped-only)
-10. [Production deltas](#10-production-deltas)
-11. [Troubleshooting](#11-troubleshooting)
+> **Current stop point:** Forge has no complete public installation channel.
+> On an empty cluster, complete §§4–6 (shared prerequisites, Identity, Sphere,
+> and Horizon) and stop at §7. Do not install Link until a complete Forge release has passed the gate
+> and supplied healthy SeaweedFS credentials.
 
-## 1. Workspace layout
+## 1. Verified versions and installation scope
 
-A **full deployment requires every NereidAI product repository cloned locally**,
-side by side with NereidOverview — charts install from local sibling paths, not
-from a remote chart repository (deploy-standards §15.5). A single-product deployment needs
-only that product's repository.
+These immutable Lab/POC versions passed anonymous chart pull/render and
+image-manifest verification on 2026-11-22:
 
-```text
-nereid-workspace/
-├── .deployment/
-│   ├── deploy-values/   # per-product site inputs, hand-offs, keys, licenses
-│   └── deploy-logs/     # per-product deployment and verification logs
-├── NereidOverview/      # this guide, prerequisites, helper scripts
-├── NereidIdentity/      # identity (Keycloak)
-├── NereidSphere/        # portal / SSO / API gateway
-├── NereidLink/          # IoT connection platform
-├── NereidHorizon/       # edge application distribution
-├── NereidForge/         # AI model factory
-├── NereidEdge/          # field gateway (compose, not in-cluster)
-├── NereidInference/     # edge inference (compose, not in-cluster)
-└── …                    # every other NereidAI repository you will deploy
-```
-
-The complete repository list is on the [organization page](https://github.com/NereidAI).
-All commands below assume this layout and are run from the workspace root
-unless stated otherwise.
-
-## 2. Image delivery and registries
-
-This chapter is the operator-facing counterpart of
-deploy-standards §15.2/§15.3/§15.8/§15.9. The installation steps below never
-change between an online and an air-gapped site; only image delivery differs,
-and it is handled entirely at the registry/node layer.
-
-### 2.1 Two image classes and the one hard rule
-
-| Class | Examples | Canonical coordinates | Air-gapped handling |
+| Product | OCI chart | Version | Source commit |
 |---|---|---|---|
-| Suite business images | `nereididentity-bootstrap`, `nereidsphere`, `nereidhorizon-*`, `nereidlink`, `nereidedge`, `nereidinference`, `nereidforge-*`, `face-service` | `ghcr.io/nereidai/<image>:<VERSION>` | Mirrored into the `<harbor-host>/nereidai` project; charts and Deployments keep the public coordinate and resolve it via the node mirror |
-| Third-party / infrastructure images | cert-manager, CSI sidecars, GPU device plugins, Keycloak, CNPG, Postgres, NATS, Kubeflow/Knative stack | `docker.io`, `quay.io`, `registry.k8s.io`, `nvcr.io`, … | Bulk-mirrored per `images.txt`/product manifests; a small number of charts that cannot express a mirror-only path accept an explicit override in **untracked operator site values** |
+| Identity | `oci://ghcr.io/nereidai/charts/nereididentity` | `0.0.0-dev-7c2797d` | `7c2797ddec13d6fcef72a535069738d247173e61` |
+| Sphere | `oci://ghcr.io/nereidai/charts/nereidsphere` | `0.0.0-dev-90379cb` | `90379cbec953c51b5807cf60f53c17fb736da1ff` |
+| Horizon | `oci://ghcr.io/nereidai/charts/nereidhorizon` | `0.0.0-dev-05aaf97` | `05aaf97bb5d3119f00ccc2ea90d3e8bb86dda49d` |
+| Link | `oci://ghcr.io/nereidai/charts/nereidlink` | `0.0.0-dev-6da29bd` | `6da29bdca204510bd4b8560c503ead28bc231c0b` |
 
-The hard rule (deploy-standards §15.3): the internal registry hostname and credentials
-exist only in the git-ignored `deploy/scripts/harbor.env` and in untracked
-operator site values. No committed chart, manifest, script, or Makefile names
-the internal host, and no suite business image is ever rewritten to an
-explicit `<harbor-host>` coordinate or an `@sha256` reference. A 2026-10-30
-live-node check verified the resulting k3s mirror configuration: a `*`
-endpoint at the site registry with no path rewrite, so the GHCR repository
-path resolves to the same registry project without duplicating `nereidai`.
+Each chart's `version` and `appVersion` are identical, and its suite images use
+that same version. Third-party images retain their public upstream coordinates
+and pinned versions.
 
-### 2.2 How suite images are produced and versioned (summary)
+The floating `0.0.0-dev` version is not reproducible. For a formal deployment,
+replace every version below with the same selected bare-SemVer release only
+after that exact chart and all its images have passed anonymous verification.
+Do not infer a release version from these examples.
 
-- **Local builds are build-only.** Every product Makefile exposes an image
-  target — `image` (NereidIdentity, NereidSphere, NereidLink, NereidHorizon
-  with `image-backend`/`image-frontend` splits, NereidInference) or `docker`
-  (NereidEdge, face-service) — that loads the image into the local daemon (or
-  writes an OCI archive for NereidEdge/NereidInference) with exactly three
-  tags and never pushes: bare `VERSION` (e.g. `0.0.1`), `VERSION-<utc-timestamp>`,
-  `VERSION-<git-short-sha>`. No `latest` tag and no push target exist anywhere
-  (deploy-standards §15.8/§15.9). Regional network acceleration uses a git-ignored
-  `local.mk` only (deploy-standards §15.2).
-- **Publication is tag-triggered.** Pushing a SemVer-shaped `v*` git tag
-  (deploy-standards §15.9; there is no VERSION file) runs the GitHub Actions release
-  workflow, which strips the leading `v`, builds the `linux/amd64` +
-  `linux/arm64` index (registered single-arch vendor images excepted) and
-  publishes the same three bare-SemVer tags to GHCR. Branch CI warms the
-  shared buildx cache; the separate default-branch dev workflow publishes
-  only the rolling `0.0.0-dev` channel, and pull requests cannot publish.
-- **Only the bare `VERSION` tag is deployment-referenced.** The timestamp and
-  git-sha tags exist for audit and rollback. An air-gapped mirror therefore
-  needs only the `VERSION` tag of each suite image; copying the trace tags is
-  optional.
-
-### 2.3 The single registry tool: harbor-sync.sh
-
-All operations that name the internal registry go through
-[`deploy/scripts/harbor-sync.sh`](../../deploy/scripts/harbor-sync.sh)
-(deploy-standards §15.3). Setup, once per operator machine:
+Set the verified Lab/POC selections explicitly:
 
 ```bash
-cd NereidOverview/deploy/scripts
-cp harbor.env.example harbor.env       # git-ignored; fill HARBOR_HOST and credentials
-chmod 600 harbor.env
-./harbor-sync.sh check                 # validates host config and skopeo/crane
-DRY_RUN=1 ./harbor-sync.sh mirror ../../deploy/prereqs/images.txt   # preview first
+export NEREIDIDENTITY_VERSION=0.0.0-dev-7c2797d
+export NEREIDSPHERE_VERSION=0.0.0-dev-90379cb
+export NEREIDHORIZON_VERSION=0.0.0-dev-05aaf97
+export NEREIDLINK_VERSION=0.0.0-dev-6da29bd
 ```
 
-| Subcommand | Purpose |
-|---|---|
-| `check` | Validate `harbor.env`, tooling, and dry-run mode |
-| `login` | Authenticate the local skopeo/crane to Harbor |
-| `mirror <manifest>` | Bulk-copy public refs into Harbor; the prerequisite manifest is [`deploy/prereqs/images.txt`](../../deploy/prereqs/images.txt) (human counterpart [`images.md`](../../deploy/prereqs/images.md)) |
-| `push <image-ref> [rel-target]` | Copy one image. A plain public ref derives its Harbor-relative target; a transport-prefixed source (`docker-daemon:…`, `oci-archive:…`) requires the explicit relative target |
-| `node-mirror [--apply]` | Render the k3s `registries.yaml` to stdout, or write `/etc/rancher/k3s/registries.yaml` (mode 600) as root; k3s must be restarted afterward |
+Record these versions, their source commits, the selected kubecontext, and the
+installation date in the deployment hand-off.
 
-### 2.4 Site scenarios
+## 2. Operator environment
 
-**Scenario A — online (cluster has internet).** Do nothing: charts pull the
-public coordinates directly. Install charts from local sibling repository
-paths regardless (deploy-standards §15.5).
+Required tools on the operator host: Helm with OCI support, `kubectl`, `tar`,
+`curl`, and `openssl`. The operator host and every cluster node must reach all
+public artifact registries referenced by the charts. DNS and TLS must be valid
+for every product endpoint.
 
-**Scenario B — air-gapped site with a connected jump host.** The jump host
-has internet and can reach both GHCR/upstream registries and the site Harbor:
+Run the shell examples from the NereidOverview repository root. Keep all site
+state outside Git:
 
 ```bash
-# 1. Third-party prerequisite images (cert-manager, CSI, device plugins)
-./harbor-sync.sh login
-./harbor-sync.sh mirror ../../deploy/prereqs/images.txt
-
-# 2. Suite business images, copied straight from GHCR (plain ref => target derived)
-for img in nereididentity-bootstrap nereidsphere nereidhorizon-backend \
-           nereidhorizon-frontend nereidlink; do
-  ./harbor-sync.sh push ghcr.io/nereidai/${img}:0.0.1
+export DEPLOYMENT_ROOT="${DEPLOYMENT_ROOT:-$HOME/.nereidai-deployment}"
+export DEPLOY_VALUES_ROOT="$DEPLOYMENT_ROOT/deploy-values"
+export DEPLOY_LOG_ROOT="$DEPLOYMENT_ROOT/deploy-logs"
+install -d -m 700 "$DEPLOYMENT_ROOT" "$DEPLOY_VALUES_ROOT" "$DEPLOY_LOG_ROOT" \
+  "$DEPLOYMENT_ROOT/chart-archives"
+for product in nereididentity nereidsphere nereidhorizon nereidforge nereidlink; do
+  install -d -m 700 "$DEPLOY_VALUES_ROOT/$product" "$DEPLOY_LOG_ROOT/$product"
 done
-# NereidForge additionally: nereidforge-backend, nereidforge-frontend, nf-runtime,
-# trainer-*, ml-backend*, prediction-jupyter-base, inference-model-server-* —
-# enumerate from its publish-images.yml; field gateway images (nereidedge,
-# nereidinference, face-service) follow the same pattern.
 
-# 3. On EVERY cluster node (run as root; included in cluster-bootstrap §5.3)
-sudo ./harbor-sync.sh node-mirror --apply
-sudo systemctl restart k3s          # or k3s-agent on worker nodes
+kubectl config current-context
+kubectl get nodes
+kubectl get namespaces
+helm version
 ```
 
-**Scenario C — fully offline build (no jump-host access to GHCR).** Build on
-a connected build machine, transfer via the local daemon or an OCI archive,
-and push from the transport-prefixed source with an explicit target:
+Confirm that the displayed context is the intended empty cluster. Stop if it is
+not. Replace every reserved `example.org` name and example NFS endpoint below
+with the site's actual values. Do not install into a cluster with existing
+Nereid releases without a separate upgrade plan.
 
-```bash
-# On the build machine, inside each product repository (build-only, no push):
-make image                                          # or `make docker`; see §2.2
-                                                    # three tags in the local daemon
-sudo ./harbor-sync.sh push \
-  docker-daemon:ghcr.io/nereidai/nereidsphere:0.0.1 \
-  nereidai/nereidsphere:0.0.1
-# Or move an archive across the gap:
-skopeo copy docker-daemon:ghcr.io/nereidai/nereidsphere:0.0.1 \
-  oci-archive:/tmp/nereidsphere-0.0.1.tar:nereidsphere
-./harbor-sync.sh push oci-archive:/tmp/nereidsphere-0.0.1.tar:nereidsphere \
-  nereidai/nereidsphere:0.0.1
-```
+### DNS plan
 
-When the source repositories themselves cannot reach the site, package the
-charts with `helm package` from the sibling product checkouts and transfer
-the `.tgz` files together with the image bundle (see §9 for a generic
-ChartMuseum flow). The on-site source-build tier table (which products are
-buildable on site versus delivered prebuilt) is deploy-standards §15.11.
+Create DNS records through the site's ingress address before product setup:
 
-### 2.5 Node mirror, pull secrets, and same-tag rollouts
+| Endpoint | Purpose |
+|---|---|
+| `sso.example.org` | NereidIdentity issuer and login |
+| `nereidsphere.example.org` | Suite portal and ticket verification |
+| `nereidhorizon.example.org` | Horizon console and API |
+| `nereidforge.example.org` | Forge console, after its release gate |
+| `labelstudio.nereidforge.example.org` | Forge Label Studio |
+| `cvat.nereidforge.example.org` | Forge CVAT |
+| `seaweedfs-s3.nereidforge.example.org` | Public S3 route required for external object downloads |
+| `nereidlink.example.org` | Link console/API and SSO callback |
 
-- The containerd mirror rendered by `node-mirror --apply` is the only
-  rewriting mechanism. Apply it on every node before installing products;
-  the Rancher-managed equivalent (registries settings in the cluster wizard)
-  is described in cluster-bootstrap §5.3.
-- With public Harbor projects no pull secret is needed. For private projects
-  create `harbor-registry-secret` per namespace and patch the default
-  ServiceAccount (commands in §3.2).
-- For a same-tag rebuild rollout, set `imagePullPolicy: Always`, wait for
-  every Deployment, and compare the ready Pod's resolved `imageID` digest
-  against the publication record rather than the tag string.
-- Explicit `<harbor-host>` coordinates may appear only in untracked operator
-  site values for third-party images whose chart cannot use the mirror path;
-  keep generated secrets outside Git.
-
-## 3. Cluster preparation
-
-### 3.1 DNS / hosts
-
-Every product Ingress uses the naming in the
-[accounts/DNS reference](reference/accounts-dns-connections.md) (pattern
-`nereid<product>.example`; `sso.example` is the sole historical
-exception). Until internal DNS exists, add the lab entry node to `/etc/hosts` on
-every node and every operator workstation:
-
-```text
-192.0.2.10 sso.example nereidsphere.example nereidlink.example \
-               nereidhorizon.example nereidforge.example \
-               labelstudio.nereidforge.example cvat.nereidforge.example \
-               seaweedfs-s3.nereidforge.example
-```
-
-### 3.2 Namespaces and registry pull secret
-
-Create the core namespaces (Forge creates its own via its scripts):
+Create the product namespaces now so the public CA certificate can be copied
+into them after Phase 0:
 
 ```bash
 kubectl create namespace nereididentity
 kubectl create namespace nereidsphere
-kubectl create namespace nereidlink
 kubectl create namespace nereidhorizon
+# Forge owns its installation namespaces; create Link only after Forge passes §7.
 ```
 
-With the node-level containerd mirror (§2.4 step 3, §2.5) and public Harbor
-projects, no pull secret is needed. For private Harbor projects, create one per namespace
-and attach it to the default ServiceAccount:
+## 3. Secret policy
 
-```bash
-kubectl -n nereididentity create secret docker-registry harbor-registry-secret \
-  --docker-server=<harbor-host> --docker-username=<user> --docker-password='<harbor-password>'
-kubectl -n nereididentity patch serviceaccount default -p \
-  '{"imagePullSecrets":[{"name":"harbor-registry-secret"}]}'
-# repeat for nereidsphere / nereidlink / nereidhorizon
-```
-
-No real password is committed anywhere; use a `<harbor-password>` placeholder
-and supply the value at install time.
-
-### 3.3 Distribute the internal CA
-
-Products verify each other's TLS using the suite internal CA. After Phase 0
-creates `nereid-internal-ca-tls` in `cert-manager`, copy it into each product
-namespace:
-
-```bash
-for ns in nereididentity nereidsphere nereidlink nereidhorizon; do
-  kubectl -n cert-manager get secret nereid-internal-ca-tls -o yaml \
-    | sed 's/namespace: cert-manager/namespace: '$ns'/' \
-    | kubectl apply -n "$ns" -f -
-done
-```
-
-(Run this again after §4.1–4.2; it is documented here so the preparation order
-is clear.)
+- Generate every password, OIDC client secret, session key, and object-store
+  credential independently, for example with `openssl rand -hex 32`. Where a
+  chart generates a value once, retain and archive that generated value instead.
+- Use a separate secret for each field; never reuse a product client secret as
+  a session key or database password.
+- Keep values files at mode `0600` under `$DEPLOY_VALUES_ROOT` and store an
+  encrypted backup in the operator's password vault.
+- Do not print secrets in acceptance output or shell tracing.
+- Values shown as `<...>` are instructions to supply a value, not literals to
+  install.
 
 ## 4. Phase 0 — shared prerequisites
 
-Install strictly in the order below. These components are owned by NereidOverview
-under [`deploy/prereqs/`](../../deploy/prereqs/); product charts only preflight-check
-them and never install them.
+### 4.1 cert-manager and internal CA
 
-### 4.1 cert-manager v1.15.3
-
-Online, via the upstream jetstack chart with CRDs:
+Install the pinned upstream chart, wait for readiness, and create the suite CA:
 
 ```bash
-helm repo add jetstack https://charts.jetstack.io
-helm repo update
+helm repo add jetstack https://charts.jetstack.io --force-update
+helm repo update jetstack
 helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace cert-manager --create-namespace \
-  --version v1.15.3 --set installCRDs=true
-```
-
-Air-gapped: mirror the five cert-manager images per
-[`images.md`](../../deploy/prereqs/images.md) and install the same chart version
-from a packaged tgz (the chart itself is a third-party chart, not vendored in
-this repository).
-
-> The live lab cluster was installed via the Rancher Apps catalog; the Helm CLI
-> above is the standard path and renders an equivalent release. Do not install
-> cert-manager twice — if a release already exists, adopt/upgrade it rather than
-> adding a second one.
-
-### 4.2 internal-ca ClusterIssuer
-
-Apply the suite CA manifest (a selfsigned issuer → CA certificate → the
-`internal-ca` ClusterIssuer):
-
-```bash
+  --version v1.15.3 --set installCRDs=true --wait --timeout 5m
 kubectl apply -f deploy/prereqs/manifests/00-internal-ca.yaml
-kubectl wait --for=condition=Ready clusterissuer internal-ca --timeout=60s
+kubectl wait --for=condition=Ready clusterissuer internal-ca --timeout=120s
 ```
 
-Then run the §3.3 CA-distribution loop. Every product Ingress uses
-`cert-manager.io/cluster-issuer: internal-ca`.
-
-### 4.3 nfs-csi StorageClass
-
-Install the wrapper chart from this repository (the upstream subchart tgz is
-vendored, so no network fetch is needed):
+Export only the CA public certificate and copy it into the namespaces that
+verify suite TLS. Do not copy the CA private key into product namespaces:
 
 ```bash
-helm upgrade --install nfs-csi deploy/prereqs/charts/nfs-csi \
-  --namespace kube-system
-```
-
-The wrapper renders the suite-contract StorageClass named `nfs-csi` while the
-subchart's own StorageClass stays disabled. The committed defaults target the
-lab (NFS `192.0.2.10:/data/nereidai`, mirrored images); a production site
-overrides with the overlay, never by editing defaults:
-
-```bash
-helm upgrade --install nfs-csi deploy/prereqs/charts/nfs-csi \
-  --namespace kube-system -f deploy/prereqs/charts/nfs-csi/values-prod.yaml
-```
-
-Verify with a test PVC (it lands in an isolated
-`<namespace>-<pvc>` subdirectory of the export), then delete it:
-
-```bash
-kubectl get storageclass nfs-csi
-```
-
-> 2026-10-29 live-cluster note: the existing `nfs-csi` release predates the
-> current wrapper values and still renders `registry.k8s.io/...` image specs;
-> pulls resolve through the node mirror. It was deliberately not upgraded during
-> product deployment because NFS CSI is shared infrastructure. Treat changing
-> that live release as a separate storage change with its own verification
-> window.
-
-### 4.4 GPU/NPU device plugins (only on GPU hosts)
-
-Install only the plugins matching the node hardware, following
-[`deploy/prereqs/device-plugins/README.md`](../../deploy/prereqs/device-plugins/README.md).
-Node drivers/container-toolkit are node prerequisites covered there, not part of
-this guide:
-
-```bash
-kubectl apply -f deploy/prereqs/device-plugins/nvidia-gpu-plugin.yaml   # NVIDIA
-kubectl apply -f deploy/prereqs/device-plugins/amd-gpu-plugin.yaml      # AMD
-# Intel requires NFD first: intel/nfd.yaml, node-feature-rules.yaml,
-# intel-gpu-plugin.yaml, then optionally intel-npu-plugin.yaml
-```
-
-Confirm the extended resources are advertised before installing Forge:
-
-```bash
-kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.allocatable}{"\n"}{end}' \
-  | grep -E 'nvidia.com/gpu|amd.com/gpu|gpu.intel.com'
-```
-
-## 5. Prepare product values
-
-Keep every operator-supplied input outside Git in the workspace-level
-`.deployment/deploy-values/<product>/` directory. Deployment and verification
-logs belong separately in `.deployment/deploy-logs/<product>/`. Product charts,
-placeholder examples, and canonical templates remain in their owning
-repositories. From the workspace root, initialize the layout without
-truncating existing values:
-
-```bash
-export DEPLOYMENT_ROOT="${DEPLOYMENT_ROOT:-$PWD/.deployment}"
-export DEPLOY_VALUES_ROOT="$DEPLOYMENT_ROOT/deploy-values"
-export DEPLOY_LOG_ROOT="$DEPLOYMENT_ROOT/deploy-logs"
-install -d -m 700 "$DEPLOYMENT_ROOT" "$DEPLOY_VALUES_ROOT" "$DEPLOY_LOG_ROOT"
-for product in nereididentity nereidsphere nereidlink nereidhorizon nereidforge; do
-  install -d -m 700 "$DEPLOY_VALUES_ROOT/$product" "$DEPLOY_LOG_ROOT/$product"
-  touch "$DEPLOY_VALUES_ROOT/$product/values.yaml"
+kubectl -n cert-manager get secret nereid-internal-ca-tls \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d \
+  > "$DEPLOYMENT_ROOT/nereid-internal-ca.crt"
+for ns in nereididentity nereidsphere nereidhorizon; do
+  kubectl -n "$ns" create secret generic nereid-internal-ca-tls \
+    --from-file=ca.crt="$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
+    --dry-run=client -o yaml | kubectl apply -f -
 done
-cp -n NereidIdentity/deploy/helm/nereididentity/values-k3s-example.yaml \
-  "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml"
-chmod 600 "$DEPLOY_VALUES_ROOT"/nereid*/values.yaml
 ```
 
-Use the Identity example as a starting point; keep the other files as minimal
-overrides populated from the verified snippets in §6 rather than copying chart
-defaults.
+### 4.2 NFS CSI StorageClass
 
-Rules:
+Prepare the NFS export and node NFS client support first. Replace both values
+with the site's actual NFS server and export:
 
-- Every chart fails rendering with a `required` message naming the missing
-  field, so a dry template is the fastest way to find an incomplete values file.
-  Generate strong values with `openssl rand -hex 32`; the dev password
-  `<dev-password>` must never appear here.
-- The exact Secret names and runtime wiring are in the
-  [accounts/DNS/connections reference](reference/accounts-dns-connections.md)
-  (§3). Verified required inputs per chart (`helm template` checked 2026-10-29):
+```bash
+helm upgrade --install nfs-csi deploy/prereqs/charts/nfs-csi \
+  --namespace kube-system \
+  --set nfs.nfs.server=nfs.example.org \
+  --set nfs.nfs.share=/export/nereidai
+kubectl get storageclass nfs-csi
+kubectl -n kube-system rollout status deploy/csi-nfs-controller --timeout=180s
+```
 
-  | Product | Minimum values that must be supplied |
-  |---|---|
-  | NereidIdentity | Seven strong values: Postgres bootstrap, master admin password, suite-admin/service-account secret, four product client secrets; `identity.seedUsers=false`. With an explicit Harbor registry, override the four image coordinates (§6.1). Install with `--timeout 10m`. |
-  | NereidSphere | For a single-replica lab: `valkey.enabled=false` + `tickets.replayStore=memory`; `config.session.secretKey` (exactly 32 bytes); OIDC `clientSecret` + `adminClientSecret`; the three `products[].ssoSecret`; `ingress.enabled=true` **plus** the `cert-manager.io/cluster-issuer` annotation and a `tls` entry (shipped disabled, with no TLS block). Multi-replica deployments keep built-in Valkey and require `valkey.auth.password`. |
-  | NereidLink | `blob.endpoint` (an in-cluster FQDN `svc.namespace.svc[:port]`), `blob.accessKey`, `blob.secretKey`; S3 is mandatory and uses Forge SeaweedFS, so complete §7.1 first. Override the bundled TimescaleDB/NATS image coordinates for an explicit registry; enable SSO with the `sso` block. Postgres/NATS are bundled by default. |
-  | NereidHorizon | Override the bundled `postgres.image` for an explicit registry; the admin user is created post-install via `POST /api/setup` (§6.4). |
+Create and delete a small test PVC before product installation; record dynamic
+provisioning, mounting, and deletion evidence. Keep node-local `local-path`
+storage for the bundled PostgreSQL and NATS data directories described below.
 
-- Set the site domains per §3.1.
+### 4.3 Hardware plugins
 
-> **Image-coordinate rule (deploy-standards §15.2/§15.3):** every product chart and the
-> nfs-csi wrapper now carries public coordinates only; the internal Harbor host
-> appears in no committed file. The node containerd mirror (§2.4/§2.5) performs
-> the host swap, so a missing Harbor tag surfaces as an `ImagePullBackOff`
-> instead of being hidden by a chart edit. The only sanctioned explicit
-> overrides are untracked site values for third-party dependency images whose
-> upstream path the site mirror cannot serve (examples in §6); never edit
-> product charts from this repository.
+Install only plugins matching the prepared node hardware, following
+[`deploy/prereqs/device-plugins/README.md`](../../deploy/prereqs/device-plugins/README.md):
 
-## 6. Phase 1 — core products
+```bash
+# Select only the applicable manifest sequence.
+kubectl apply -f deploy/prereqs/device-plugins/nvidia-gpu-plugin.yaml
+kubectl apply -f deploy/prereqs/device-plugins/amd-gpu-plugin.yaml
+# Intel: nfd.yaml, node-feature-rules.yaml, intel-gpu-plugin.yaml,
+# then optionally intel-npu-plugin.yaml.
+```
 
-Phase-1 order is **NereidIdentity → NereidSphere → NereidHorizon**. Then
-complete Forge in §7.1 before installing Link in §7.2: Link's suite SSO points
-at Sphere and its permanent blob store is Forge SeaweedFS. Field gateways come
-last.
+Confirm the expected extended resources appear in node capacity before Forge.
+Do not apply hardware manifests for absent hardware merely to complete a list.
 
-No product repository carries a VERSION file: the signed `v*` git tag is the
-single version source and every artifact coordinate uses bare SemVer with the
-leading `v` stripped (deploy-standards §15.9); branch builds use the `0.0.0-dev` channel.
-Release and namespace names follow each product's convention below.
+### 4.4 CloudNativePG CRDs for Identity
 
-### 6.1 NereidIdentity
-
-The CNPG and Keycloak chart dependencies are vendored as tgz files in the
-product chart's `charts/` directory; do not run `helm dependency update` on an
-offline host.
-CNPG treats its CRDs as cluster-wide resources. On a clean host, install them
-once from the vendored dependency (server dry-run verified 2026-10-29):
+Identity's locked dependency uses the CloudNativePG operator chart `0.29.0`.
+Install its cluster-wide CRDs once, without installing a second operator:
 
 ```bash
 if ! kubectl get crd clusters.postgresql.cnpg.io >/dev/null 2>&1; then
-  tar -xOzf NereidIdentity/deploy/helm/nereididentity/charts/cloudnative-pg-0.29.0.tgz \
-    cloudnative-pg/templates/crds/crds.yaml \
-    | sed '1d;$d' \
+  helm pull cloudnative-pg --repo https://cloudnative-pg.io/charts \
+    --version 0.29.0 --destination "$DEPLOYMENT_ROOT/chart-archives"
+  tar -xOzf "$DEPLOYMENT_ROOT/chart-archives/cloudnative-pg-0.29.0.tgz" \
+    cloudnative-pg/templates/crds/crds.yaml | sed '1d;$d' \
     | kubectl apply --server-side --force-conflicts -f -
 fi
+kubectl get crd clusters.postgresql.cnpg.io
 ```
 
-These third-party dependency images are normally resolved through the node
-containerd mirror with no value changes (§2.1). Add the following overrides
-only to untracked operator site values when a site's Harbor cannot serve the
-upstream paths — never commit them, and never override the suite's own
-`bootstrap` business image away from its `ghcr.io/nereidai` coordinate. The
-Harbor `library/python` project has no `3.12-alpine` tag; use `3.12-slim`
-(pull-tested 2026-10-29):
+## 5. Phase 1 — NereidIdentity
 
-```yaml
-postgresql:
-  image:
-    repository: <harbor-host>/cloudnative-pg/cloudnative-pg
-    tag: "1.30.0"
-  cluster:
-    imageName: <harbor-host>/cloudnative-pg/postgresql:16.4
-keycloak:
-  image:
-    repository: <harbor-host>/keycloak/keycloak
-    tag: "26.1"
-  dbchecker:
-    image:
-      repository: <harbor-host>/library/busybox
-      tag: "1.36.1"
-bootstrap:
-  image:
-    repository: <harbor-host>/library/python
-    tag: "3.12-slim"
-```
-
-Install with a long client timeout. The post-install hook waits through database
-initialization, Keycloak startup, and realm import; a 120-second client timeout
-can leave the Kubernetes resources progressing while the Helm release is marked
-failed:
+Initialize the example values from the same verified OCI package, then edit the
+copy before installation:
 
 ```bash
-helm upgrade --install nereididentity NereidIdentity/deploy/helm/nereididentity \
+install -d -m 700 "$DEPLOY_VALUES_ROOT/nereididentity"
+helm pull oci://ghcr.io/nereidai/charts/nereididentity \
+  --version "$NEREIDIDENTITY_VERSION" \
+  --destination "$DEPLOYMENT_ROOT/chart-archives"
+test -s "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml" || \
+  tar -xOzf "$DEPLOYMENT_ROOT/chart-archives/nereididentity-${NEREIDIDENTITY_VERSION}.tgz" \
+    nereididentity/values-k3s-example.yaml \
+    > "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml"
+chmod 600 "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml"
+```
+
+Supply these required values with unique strong secrets:
+
+- `postgresql.bootstrap.password`;
+- `identity.admin.password`;
+- `identity.adminClient.secret`;
+- `identity.clients.nereidsphere.secret`;
+- `identity.clients.nereidhorizon.secret`;
+- `identity.clients.nereidforge.secret`; and
+- `identity.clients.nereidlink.secret`.
+
+Keep `identity.seedUsers=false`. Set the SSO Ingress host and every product
+redirect/web origin to the planned `example.org` replacements. Set the
+`identity.suiteAdmin` identity fields deliberately. Either supply a unique
+strong `identity.suiteAdmin.password`, or leave only that password empty so the
+chart generates it once on first installation. The generated value is retained
+in Secret `nereididentity-realm`, key `suite-admin-password`; retrieve and store
+it securely after installation. An explicit password is used only when the
+suite-admin user is first created.
+
+Install and verify:
+
+```bash
+helm upgrade --install nereididentity \
+  oci://ghcr.io/nereidai/charts/nereididentity \
+  --version "$NEREIDIDENTITY_VERSION" \
   --namespace nereididentity --create-namespace --skip-crds --timeout 10m \
   --values "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml"
-```
-
-> **Known NereidIdentity chart defect on Keycloak 26.1.5 (live check
-> 2026-10-29).** A fresh realm import can leave only the `groups` and
-> `offline_access` client scopes. The bootstrap hook then fails with
-> `built-in 'roles' client scope not found`. This is a cross-repo chart bug; do
-> not edit the sibling repository from NereidOverview. The lab workaround is to
-> copy the missing built-in scopes from `master`, attach them to the imported
-> clients, then rerun the same `helm upgrade`.
->
-> ```bash
-> cat > /tmp/keycloak-scope-repair.yaml <<'EOF'
-> apiVersion: v1
-> kind: Pod
-> metadata:
->   name: keycloak-scope-repair
->   namespace: nereididentity
-> spec:
->   restartPolicy: Never
->   containers:
->     - name: repair
->       image: <harbor-host>/library/python:3.12-slim
->       command: ["sleep", "600"]
->       env:
->         - name: KEYCLOAK_ADMIN
->           valueFrom:
->             secretKeyRef:
->               name: nereididentity-admin
->               key: KEYCLOAK_ADMIN
->         - name: KEYCLOAK_ADMIN_PASSWORD
->           valueFrom:
->             secretKeyRef:
->               name: nereididentity-admin
->               key: KEYCLOAK_ADMIN_PASSWORD
-> EOF
-> kubectl apply -f /tmp/keycloak-scope-repair.yaml
-> kubectl -n nereididentity wait --for=condition=Ready pod/keycloak-scope-repair --timeout=60s
-> kubectl -n nereididentity exec -i keycloak-scope-repair -- python3 - <<'PY'
-> import json, os, urllib.error, urllib.parse, urllib.request
->
-> BASE = "http://nereididentity-keycloak-http:80/auth"
-> REALM = "nereidai"
-> BUILTIN = ["web-origins", "roles", "profile", "email"]
-> ALL_DEFAULT = BUILTIN + ["groups"]
->
-> form = urllib.parse.urlencode({
->     "client_id": "admin-cli",
->     "grant_type": "password",
->     "username": os.environ["KEYCLOAK_ADMIN"],
->     "password": os.environ["KEYCLOAK_ADMIN_PASSWORD"],
-> }).encode()
-> req = urllib.request.Request(BASE + "/realms/master/protocol/openid-connect/token", form)
-> token = json.load(urllib.request.urlopen(req))["access_token"]
-> headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
->
-> def call(method, path, body=None):
->     data = json.dumps(body).encode() if body is not None else None
->     request = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
->     try:
->         with urllib.request.urlopen(request, timeout=20) as response:
->             raw = response.read()
->             return response.status, json.loads(raw) if raw else None
->     except urllib.error.HTTPError as error:
->         if error.code == 409 and method == "PUT":
->             return error.code, None  # already attached
->         raise RuntimeError(f"{method} {path}: {error.code} {error.read().decode()}")
->
-> _, master_scopes = call("GET", "/admin/realms/master/client-scopes")
-> _, realm_scopes = call("GET", f"/admin/realms/{REALM}/client-scopes")
-> existing = {scope["name"] for scope in realm_scopes}
-> for name in BUILTIN:
->     if name in existing:
->         continue
->     source = next(scope for scope in master_scopes if scope["name"] == name)
->     _, full = call("GET", "/admin/realms/master/client-scopes/" + source["id"])
->     representation = {
->         key: full.get(key)
->         for key in ("name", "description", "protocol", "attributes")
->     }
->     representation["protocolMappers"] = [
->         {key: mapper.get(key) for key in (
->             "name", "protocol", "protocolMapper", "consentRequired", "config")}
->         for mapper in full.get("protocolMappers", [])
->     ]
->     call("POST", f"/admin/realms/{REALM}/client-scopes", representation)
->
-> _, realm_scopes = call("GET", f"/admin/realms/{REALM}/client-scopes")
-> scope_ids = {scope["name"]: scope["id"] for scope in realm_scopes}
-> for name in ALL_DEFAULT:
->     call("PUT", f"/admin/realms/{REALM}/default-default-client-scopes/{scope_ids[name]}")
->
-> _, clients = call("GET", f"/admin/realms/{REALM}/clients")
-> product_clients = {
->     "nereidsphere", "nereidsphere-admin", "nereidlink", "nereidhorizon", "nereidforge"
-> }
-> for client in clients:
->     if client["clientId"] not in product_clients:
->         continue
->     wanted = ["roles"] if client["clientId"] == "nereidsphere-admin" else ALL_DEFAULT
->     _, current = call("GET", f"/admin/realms/{REALM}/clients/{client['id']}/default-client-scopes")
->     current_names = {scope["name"] for scope in current}
->     for name in wanted:
->         if name not in current_names:
->             call("PUT", f"/admin/realms/{REALM}/clients/{client['id']}/default-client-scopes/{scope_ids[name]}")
-> PY
-> kubectl -n nereididentity delete pod keycloak-scope-repair --force
-> ```
->
-> Then rerun the `helm upgrade` command above.
-
-Verify:
-
-```bash
 kubectl -n nereididentity get clusters.postgresql.cnpg.io
-kubectl -n nereididentity get pod -l app.kubernetes.io/name=keycloak
-curl -sk https://sso.example/auth/realms/nereidai/.well-known/openid-configuration
+kubectl -n nereididentity get pods
+curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
+  https://sso.example.org/auth/realms/nereidai/.well-known/openid-configuration \
+  > "$DEPLOY_LOG_ROOT/nereididentity/openid-configuration.json"
 ```
 
-The external issuer must be `https://sso.example/auth/realms/nereidai`, and
-`identity.seedUsers=false` must be set in a central deployment.
+Stop until the CNPG cluster, Keycloak, and bootstrap hook are healthy and the
+issuer document returns successfully. Do not continue after a failed Helm hook.
 
-### 6.2 NereidSphere
+## 6. Phase 2 — NereidSphere and NereidHorizon
 
-The chart ships Ingress disabled and defaults to a multi-replica Valkey
-deployment. For the single-replica lab, use in-memory ticket replay instead of
-deploying Valkey:
+### 6.1 NereidSphere
+
+For a single-replica Lab/POC, create
+`$DEPLOY_VALUES_ROOT/nereidsphere/values.yaml` with the following structure.
+Replace all domains and secrets. `config.session.secretKey` must be exactly 32
+bytes; `openssl rand -hex 16` produces 32 ASCII characters.
 
 ```yaml
 replicaCount: 1
@@ -607,306 +270,313 @@ ingress:
   className: traefik
   annotations:
     cert-manager.io/cluster-issuer: internal-ca
+  hosts:
+    - host: nereidsphere.example.org
+      paths:
+        - path: /
+          pathType: Prefix
   tls:
-    - hosts: [nereidsphere.example]
+    - hosts: [nereidsphere.example.org]
       secretName: nereidsphere-tls
 config:
-  session:
-    # 32 ASCII bytes; generate with: openssl rand -hex 16
-    secretKey: "<32-byte-session-key>"
+  server:
+    baseUrl: https://nereidsphere.example.org
   oidc:
+    issuer: https://sso.example.org/auth/realms/nereidai
+    clientId: nereidsphere
     clientSecret: "<identity.clients.nereidsphere.secret>"
+    adminClientId: nereidsphere-admin
     adminClientSecret: "<identity.adminClient.secret>"
     caBundleSecret: nereid-internal-ca-tls
+  session:
+    secretKey: "<exactly-32-byte-session-key>"
+  products:
+    - id: forge
+      name: NereidForge
+      description: Model factory
+      url: https://nereidforge.example.org
+      mode: ns
+      oidcClientId: nereidforge
+      ssoSecret: "<new-independent-forge-ticket-secret>"
+      tenantsPath: /v1/integration/ns/tenants
+    - id: horizon
+      name: NereidHorizon
+      description: Edge distribution
+      url: https://nereidhorizon.example.org
+      mode: ns
+      oidcClientId: nereidhorizon
+      ssoSecret: "<new-independent-horizon-ticket-secret>"
+      tenantsPath: /v1/integration/ns/tenants
+    - id: link
+      name: NereidLink
+      description: IoT platform
+      url: https://nereidlink.example.org
+      mode: ns
+      oidcClientId: nereidlink
+      ssoSecret: "<new-independent-link-ticket-secret>"
+      tenantsPath: /v1/integration/ns/tenants
 ```
 
-Also replace every product `ssoSecret` under `config.products`. The Link entry
-must match Link's `sso.ssoSecret`; the Horizon entry must later match Horizon's
-`ns.clientSecret`.
-
-For multi-replica deployments, keep built-in Valkey and supply
-`valkey.auth.password`. The chart's default `<harbor-host>/nereidai/valkey`
-tag was absent during the 2026-10-29 Harbor check; override it to the
-pull-tested coordinate:
-
-```yaml
-valkey:
-  image:
-    repository: <harbor-host>/valkey/valkey
-    tag: "8.0-alpine"
-```
-
-Install and verify:
+For a multi-replica deployment, retain the built-in Valkey topology, set
+`valkey.enabled=true`, supply `valkey.auth.password`, and use the Valkey ticket
+replay store. Do not use the in-memory replay store with multiple replicas.
 
 ```bash
-helm upgrade --install nereidsphere NereidSphere/deploy/helm \
+chmod 600 "$DEPLOY_VALUES_ROOT/nereidsphere/values.yaml"
+helm upgrade --install nereidsphere \
+  oci://ghcr.io/nereidai/charts/nereidsphere \
+  --version "$NEREIDSPHERE_VERSION" \
   --namespace nereidsphere --create-namespace --timeout 5m \
   --values "$DEPLOY_VALUES_ROOT/nereidsphere/values.yaml"
-
-kubectl -n nereidsphere rollout status deploy/nereidsphere --timeout=180s
-curl -sk https://nereidsphere.example/readyz
-echo | openssl s_client -connect nereidsphere.example:443 \
-  -servername nereidsphere.example 2>/dev/null | openssl x509 -noout -issuer
+kubectl -n nereidsphere rollout status deploy/nereidsphere --timeout=240s
+curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
+  https://nereidsphere.example.org/readyz
 ```
 
-The issuer must be `CN=nereid-internal-ca`. Enabling Ingress without the
-`cert-manager.io/cluster-issuer` annotation and `tls` entry leaves Traefik
-serving its default self-signed certificate (observed during the live install).
+Stop until readiness succeeds and an unauthenticated browser visit reaches the
+Identity login flow.
 
-### 6.3 NereidHorizon
+### 6.2 NereidHorizon
 
-The chart's bundled Postgres value is a single image string (not
-`registry`/`repository` split). Online sites keep the public
-`postgres:16-alpine` coordinate and rely on the node mirror; set an explicit
-override only in untracked site values for a private/mirrored site (lab form):
+Create `$DEPLOY_VALUES_ROOT/nereidhorizon/values.yaml`. The chart generates a
+64-hex-character session encryption key on first installation and retains it in
+the release Secret on upgrades; archive that Secret securely.
 
 ```yaml
+global:
+  imagePullSecrets: []
 postgres:
-  image: <harbor-host>/library/postgres:16-alpine
+  auth:
+    password: "<new-strong-horizon-postgres-password>"
+  persistence:
+    storageClass: local-path
+ns:
+  enabled: true
+  baseUrl: https://nereidsphere.example.org
+  productId: horizon
+  clientSecret: "<Sphere config.products[id=horizon].ssoSecret>"
+  callbackPath: /auth/ns-callback
+  caBundleSecret: nereid-internal-ca-tls
+  caBundleKey: ca.crt
+ingress:
+  enabled: true
+  className: traefik
+  host: nereidhorizon.example.org
+  tls:
+    enabled: true
+    secretName: nereidhorizon-tls
 ```
 
-Install and verify:
+Install both application tiers and verify the API:
 
 ```bash
-helm upgrade --install nereidhorizon NereidHorizon/deploy/helm/nereidhorizon \
+chmod 600 "$DEPLOY_VALUES_ROOT/nereidhorizon/values.yaml"
+helm upgrade --install nereidhorizon \
+  oci://ghcr.io/nereidai/charts/nereidhorizon \
+  --version "$NEREIDHORIZON_VERSION" \
   --namespace nereidhorizon --create-namespace --timeout 8m \
   --values "$DEPLOY_VALUES_ROOT/nereidhorizon/values.yaml"
-
 kubectl -n nereidhorizon rollout status deploy/nereidhorizon-backend --timeout=240s
-curl -sk https://nereidhorizon.example/api/health
-curl -sk https://nereidhorizon.example/api/setup-status
+kubectl -n nereidhorizon rollout status deploy/nereidhorizon-frontend --timeout=240s
+curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
+  https://nereidhorizon.example.org/api/health
+curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
+  https://nereidhorizon.example.org/api/setup-status
 ```
 
-The chart creates no admin user. After install, complete setup through the
-product's documented `POST /api/setup` flow (port-forward if the route is not
-yet exposed):
+Open the Horizon console and complete the first-run Setup form manually. Create
+a new platform administrator and supply an Open Horizon Exchange base URL plus
+a hub-level super-account. Do not reuse the platform administrator password as
+the Exchange credential. Setup validates Exchange reachability and privileges.
 
-```bash
-kubectl -n nereidhorizon port-forward svc/nereidhorizon-backend 3001:3001
-# then POST http://localhost:3001/api/setup with the platform admin and Exchange
-# super-account credentials (see NereidHorizon's own documentation)
-```
+Configure Forge and ESS endpoints only after their actual endpoints exist.
+Pattern/agreement delivery and ESS model delivery are separate later steps.
 
-Configure Exchange/Forge/ESS endpoints at runtime (the chart deliberately does
-not model them). The certificate must also chain to `CN=nereid-internal-ca`.
+**Current empty-cluster stop point:** accept Identity, Sphere, and Horizon,
+record their health, and stop here until §7's Forge gate can be satisfied.
 
-## 7. Phase 1b — Forge, Link and field gateways
+## 7. Forge availability gate
 
-### 7.1 NereidForge (infra + Kubeflow + business layer)
+Do not run a Forge installation from the rolling channel. A complete public
+Forge installation requires all of the following for one selected formal
+version:
 
-Validated end-to-end on the `nereidai` lab cluster 2026-10-29 (`60_verify.sh`
-all green). Forge owns its own namespaces (`nereidforge`, `kubeflow`, `auth`,
-`istio-system`, `knative-*`, `kserve`, `kubeflow-system`, `default` MR server);
-the suite layer only supplies the prerequisites.
+1. successful publication of all 23 suite-owned image jobs;
+2. all nine active OCI charts, with independent upstream wrapper metadata
+   preserved;
+3. anonymous verification of every chart and image;
+4. the versioned Forge installer, checksum, image manifest, and chart manifest;
+5. anonymous retrieval and extraction verification of that installer; and
+6. a documented source commit and formal tag.
 
-**Preflight (all must hold before starting):**
+Those artifacts do not currently exist as a verified complete set. This guide
+therefore provides no Forge package URL or installation command. When the gate
+is met, use the selected Forge release's staged infrastructure, Kubeflow,
+application, and verification procedure; require its final verification to pass
+before creating Link values.
 
-- `nfs-csi` StorageClass and `internal-ca` ClusterIssuer exist (§4); the NFS
-  export `/data/nereidforge_share` is live with `no_root_squash`.
-- `infra/third_party/kubeflow-manifests/` is present in the NereidForge checkout
-  with pinned upstream references and NF patches. An online source install needs
-  GitHub access when stage 30 materializes JobSet/LWS into its temporary render
-  tree. An air-gapped install must use NereidForge's generated offline package,
-  which reuses those verified upstream assets without storing them in Git.
-- The node-level containerd mirror (§2.4/§2.5) must resolve every image the
-  charts name — NF no longer has any registry/profile switch or internal-host
-  variable; its resolver always renders public refs
-  (`ghcr.io/nereidai/<flat>:<VERSION>`, upstream registries unchanged). The
-  self-built set includes the flat refs `nereidforge-backend`,
-  `nereidforge-frontend`, `ml-backend`, `nf-runtime` and the `trainer-*` /
-  `train-*` families (the complete list is NF's
-  `.github/workflows/publish-images.yml`); mirror them with `harbor-sync.sh`
-  per §2.4. Lab observation 2026-10-29: three upstream refs were missing from
-  the mirror and had to be copied first (`skopeo copy --all`):
-  `library/alpine:3.23` (KFP pods),
-  `knative-releases/knative.dev/serving/cmd/queue:v1.22.0` (the manifests pin
-  its digest) and `filebrowser/filebrowser:v2.32.0` (volume viewer).
-- Central `.deployment/deploy-values/nereidforge/site.env` sets
-  `BASE_DOMAIN`/`FRONTEND_HOST=nereidforge.example`,
-  `NFS_SERVER`/`NFS_SHARE`, `PG_INSTANCES=2` (lab), `PG_ADMIN_PASSWORD`,
-  `JWT_SECRET`, `DEX_STATIC_PASSWORD`, a unique `SEAWEEDFS_S3_ACCESS_KEY` plus
-  strong `SEAWEEDFS_S3_SECRET_KEY`, and the SSO block `SSO_MODE=ns`,
-  `SSO_OIDC_*` (client `nereidforge`), `SSO_NS_*` (product `forge`). The
-  deployment scripts load this file by default; `NF_ENV_FILE` overrides it.
+Forge must leave these Link inputs in the operator's private hand-off:
 
-**Staged install (run from the NereidForge repo root; no registry environment
-is needed — every image stays at its public coordinate and the node mirror
-from §2.4 does the host swap):**
+- reachable SeaweedFS S3 endpoint;
+- a public S3 endpoint if browsers or edge hosts need presigned downloads;
+- bucket access key and secret key; and
+- the CA/TLS settings for both endpoints.
 
-```bash
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-COMMON_ENV=(HOME=/root KUBECONFIG=$KUBECONFIG KUBECTL=kubectl)
+## 8. NereidLink (after Forge)
 
-# 1. Infra: CNPG cluster + business DBs, Valkey, SeaweedFS, Label Studio, CVAT,
-#    LS/CVAT token bootstrap. The central site.env must supply a unique S3
-#    access key and a strong SEAWEEDFS_S3_SECRET_KEY; do not use the dev default.
-sudo env "${COMMON_ENV[@]}" bash infra/scripts/10_infra.sh
+**Stop unless Forge and its final verification are complete.** Link requires
+Forge SeaweedFS from its first installation. There is no supported temporary
+object store. Reuse the exact Forge credentials; do not create a different
+credential pair for Link.
 
-# 2. Kubeflow: 18 kustomize targets + profile/RBAC/mlpipeline-bucket/tenant wiring.
-#    On a fresh cluster the first passes report ordering failures (CRDs/webhooks
-#    not ready yet) — that is expected; rerun until every target says Applied.
-sudo env "${COMMON_ENV[@]}" bash infra/scripts/30_install-kubeflow.sh
-sudo env "${COMMON_ENV[@]}" bash infra/scripts/30_install-kubeflow.sh   # converge
-
-# 3. Business layer (ml-backend, api+worker, frontend, TLS). A fresh admin gets
-#    a random 48-hex password; existing passwords stay unchanged unless
-#    NF_ADMIN_PASSWORD is explicitly supplied for rotation.
-sudo env "${COMMON_ENV[@]}" bash infra/scripts/40_nereidforge.sh nereidforge
-
-# 4. Acceptance: infra / Kubeflow / Model Registry (Dex login included) /
-#    business layer (real admin login, SSO ns mode) / tenant provisioning
-sudo env "${COMMON_ENV[@]}" bash infra/scripts/60_verify.sh
-```
-
-A clean final `30_install-kubeflow.sh` pass applies all 18 targets (`kserve` and
-`trainer` via server-side apply). Do not use the interactive `00_deploy-all.sh`
-for an unattended install.
-
-**Verify externally:** `https://nereidforge.example/` (200),
-`/api/v1/auth/sso/status` returns `{"mode":"ns","enabled":true,...}`,
-`https://labelstudio.nereidforge.example/` and
-`https://cvat.nereidforge.example/` respond, and every certificate chains to
-`CN=nereid-internal-ca`. Kubeflow's Dex login uses the site
-`DEX_STATIC_EMAIL / DEX_STATIC_PASSWORD`; the NF local admin is `admin` plus the
-strong password in `../.deployment/deploy-values/nereidforge/admin-credentials.env`
-(mode 0600). SSO login uses the suite realm admin (reference §3.1). Forge writes
-mode-0600 stage logs under `../.deployment/deploy-logs/nereidforge/`; save an
-encrypted off-cluster backup of the credential and service-token hand-offs. To
-rotate a legacy admin, run stage 40 with
-`NF_ADMIN_PASSWORD="$(openssl rand -hex 24)"`, save the updated credential
-file, and rerun stage 60.
-
-### 7.2 NereidLink
-
-Link uses Forge SeaweedFS from the first install; there is no temporary or
-`emptyDir` backend. Complete §7.1 and reuse the exact
-`SEAWEEDFS_S3_ACCESS_KEY` / `SEAWEEDFS_S3_SECRET_KEY` from Forge's central
-`site.env`. Link's blob store creates the `nereidlink` bucket idempotently when
-it starts.
-
-Set the Link site values. The chart-default bundled images
-`<harbor-host>/nereidai/postgres:16-timescale` and
-`<harbor-host>/nereidai/nats:2.10-alpine` were absent in Harbor on
-2026-10-29; these pull-tested overrides work:
+The verified Link Lab/POC chart is listed in §1. Create
+`$DEPLOY_VALUES_ROOT/nereidlink/values.yaml` from this structure only after the
+Forge gate:
 
 ```yaml
+imagePullSecrets: []
+registryCredentials:
+  create: false
+replicaCount: 1
+auth:
+  jwtSecret: "<new-strong-link-jwt-secret>"
+ingress:
+  enabled: true
+  className: traefik
+  host: nereidlink.example.org
+  tls:
+    enabled: true
+    secretName: nereidlink-tls
 postgresql:
-  password: "<strong-password>"
-  image:
-    registry: <harbor-host>
-    repository: timescale/timescaledb
-    tag: "2.17.2-pg16"
+  mode: bundled
+  password: "<new-strong-link-postgres-password>"
+  storageClass: local-path
 nats:
-  image:
-    registry: <harbor-host>
-    repository: library/nats
-    tag: "2.10-alpine"
+  enabled: true
+  replicas: 1
+  jetstreamReplicas: 1
+  storageClass: local-path
+persistence:
+  storageClass: nfs-csi
 blob:
-  endpoint: "seaweedfs-s3.nereidforge.svc.cluster.local:8333"
-  bucket: "nereidlink"
+  endpoint: seaweedfs-s3.nereidforge.svc.cluster.local:8333
+  publicEndpoint: seaweedfs-s3.nereidforge.example.org:443
+  bucket: nereidlink
   accessKey: "<Forge SEAWEEDFS_S3_ACCESS_KEY>"
   secretKey: "<Forge SEAWEEDFS_S3_SECRET_KEY>"
   secure: false
+  publicSecure: true
 sso:
   enabled: true
-  nsBaseURL: "https://nereidsphere.example"
-  clientID: "link"
+  nsBaseURL: https://nereidsphere.example.org
+  clientID: link
   ssoSecret: "<Sphere config.products[id=link].ssoSecret>"
-  callbackPath: "/auth/ns-callback"
-  caBundleSecret: "nereid-internal-ca-tls"
-  caBundleKey: "ca.crt"
+  callbackPath: /auth/ns-callback
+  caBundleSecret: nereid-internal-ca-tls
+  caBundleKey: ca.crt
+pki:
+  serverHosts:
+    - localhost
+    - nereidlink
+    - nereidlink.nereidlink.svc.cluster.local
+    - nereidlink.example.org
+    - "<edge-facing-node-dns-name>"
 ```
 
-Install and verify:
+Create the Link namespace and copy only the CA public certificate into it:
 
 ```bash
-helm upgrade --install nereidlink NereidLink/deploy/kubernetes/helm/nereidlink \
+kubectl create namespace nereidlink
+kubectl -n nereidlink create secret generic nereid-internal-ca-tls \
+  --from-file=ca.crt="$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
+  --dry-run=client -o yaml | kubectl apply -f -
+chmod 600 "$DEPLOY_VALUES_ROOT/nereidlink/values.yaml"
+```
+
+Install and verify both tiers:
+
+```bash
+helm upgrade --install nereidlink \
+  oci://ghcr.io/nereidai/charts/nereidlink \
+  --version "$NEREIDLINK_VERSION" \
   --namespace nereidlink --create-namespace --timeout 8m \
   --values "$DEPLOY_VALUES_ROOT/nereidlink/values.yaml"
-
 kubectl -n nereidlink rollout status deploy/nereidlink --timeout=240s
-
-# Idempotent first-run hand-off: bootstrap a random 48-hex admin password when
-# required, then generate/install a default signed license only when none exists.
-# Requires Go and the offline vendor key under deploy-values/nereidlink/license/private/.
-NereidLink/deploy/kubernetes/scripts/deploy.sh post-deploy
-
-curl -sk https://nereidlink.example/healthz
-kubectl -n nereidlink get svc nereidlink-mqtt   # NodePorts 31883/31884
+kubectl -n nereidlink rollout status deploy/nereidlink-frontend --timeout=240s
+kubectl -n nereidlink get svc nereidlink-mqtt
+curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
+  https://nereidlink.example.org/healthz
+kubectl -n nereidlink exec deployment/nereidlink -c nereidlink -- \
+  cat /var/lib/nereidlink/pki/ca.pem \
+  > "$DEPLOYMENT_ROOT/nereidlink-device-ca.pem"
+openssl x509 -in "$DEPLOYMENT_ROOT/nereidlink-device-ca.pem" \
+  -noout -subject -fingerprint -sha256
 ```
 
-The bundled migration init-container must complete successfully before the app
-starts; `Init:Error` can be transient while the last init container exits, but a
-repeated failure requires the init-container logs. A successful rollout also
-proves authenticated access to Forge SeaweedFS and creation of the Link bucket.
+Link generates its own device CA and signs the MQTT server leaf with it. The
+exported `ca.pem` is the public CA certificate for edge MQTT verification; it is
+not the suite Ingress CA. Never export `ca-key.pem` or `server-key.pem`. Preserve
+the Link data PVC and back it up under the site's encryption policy so the CA
+and issued credentials survive restarts.
 
-First login is the bootstrap admin `admin@nereidai.local`. The post-deploy CLI
-uses the one-time bootstrap API, writes the strong password to
-`.deployment/deploy-values/nereidlink/admin-credentials.env` (mode 0600), and
-prints a save reminder. The signed default license and final license status are
-in the same product values directory; deployment logs are under
-`.deployment/deploy-logs/nereidlink/`. Existing passwords and licenses are
-preserved on reruns; the vendor private key never enters the cluster. Confirm
-unauthenticated API calls return 401.
+The migration init container must complete and the application must create the
+`nereidlink` bucket through Forge SeaweedFS. Check logs and storage before
+accepting the rollout. Complete the one-time administrator bootstrap through
+the web UI. Import any site license through the product's supported runtime
+interface; no signing private key is part of chart installation.
 
-### 7.3 Field gateways
+## 9. Open Horizon edge delivery
 
-| Component | Order / preflight | Authoritative procedure |
-|---|---|---|
-| **Field gateways** (EdgeX 4.0.2 + NereidInference + NereidEdge) | Last; not in the cluster (compose). Preflight: Link NodePorts 31883/31884 reachable; a one-secret-per-gateway credential pair created in the Link console. | NereidInference / NereidEdge repositories' compose docs; credential keys in the [reference](reference/accounts-dns-connections.md) §3.6–3.7 |
+Perform these operations separately for each edge host after Link is healthy.
+Use the operator-generated Open Horizon registration inputs and the verified
+Nereid service definitions; this guide does not invent public edge-package
+coordinates.
 
-## 8. Phase 2 — end-to-end verification
+1. **Register the edge host.** Install the site-approved Open Horizon agent,
+   register the node with the Exchange organization, and confirm `hzn node
+   list` reports the intended node and organization.
+2. **Deliver the Pattern.** Publish/select the NereidEdge/NereidInference
+   Pattern in Horizon, wait for an agreement, and confirm `hzn agreement list`
+   plus the edge service health. An agreement alone is not application
+   acceptance.
+3. **Connect NereidEdge to Link.** Create one gateway credential pair per edge
+   host in Link. Set `NEREID_BROKER_URL` to
+   `tls://nereidlink.example.org:31884`, mount the exported Link public device CA
+   read-only on the edge, and set `NEREID_ROOT_CA_FILE` to its in-container path.
+   Configure the unique edge ID, credentials, and device map through the edge
+   service configuration. Keep credentials out of Patterns, shell history, and
+   committed files; do not substitute the suite Ingress CA or disable TLS
+   verification.
+4. **Verify the data path.** Check the NereidEdge health endpoint and confirm
+   the same edge ID reports heartbeats and telemetry in Link. Verify the MQTT
+   server certificate against Link's public device CA and check its SANs.
+5. **Deliver a model through ESS.** As a separate Horizon operation, publish an
+   immutable model object with its expected SHA-256, deliver it to the selected
+   edge destination, and verify the received object and inference status.
+   Record the ESS object ID and digest; a Pattern agreement does not prove ESS
+   delivery.
 
-Work through the full sign-off checklist:
-[reference/fresh-cluster-checklist.md](reference/fresh-cluster-checklist.md)
-(sections L6–L7). Minimum end-to-end gates:
+## 10. Final acceptance and troubleshooting
 
-- SSO loop: open a product domain unauthenticated → redirect to NereidIdentity
-  → back with a session; single sign-on into another product in the same browser.
-- MQTT: a client completes connect/hello/heartbeat over NodePort 31883 (TLS 31884).
-- Every product domain serves a certificate chained to `internal-ca`.
-- NFS subdirectories are separated per `<namespace>-<pvc>`.
-- No `changeme*`/dev default password remains; retrieve and archive every Secret
-  per the reference §5 commands.
+Complete [`reference/fresh-cluster-checklist.md`](reference/fresh-cluster-checklist.md)
+and archive non-secret evidence under `$DEPLOY_LOG_ROOT`. Minimum product gates:
 
-## 9. ChartMuseum (optional, air-gapped only)
-
-Skip entirely when product repositories are cloned locally — local chart paths
-are the standard (deploy-standards §15.5). ChartMuseum only serves sites that
-redistribute charts without source access. Bring your own ChartMuseum instance
-(or any OCI/chart registry reachable on the site network) and publish the
-charts packaged from the sibling product checkouts:
-
-```bash
-# Run from the workspace root; every product chart lives in its own repo.
-helm package ../NereidIdentity/deploy/helm/nereididentity
-helm package ../NereidSphere/deploy/helm/nereidsphere
-# …repeat for each product chart, then upload the tgz files.
-curl -fsS --data-binary "@nereididentity-0.0.1.tgz" \
-  "http://<chartmuseum-host>/api/charts"
-helm repo add nereidai http://<chartmuseum-host>
-```
-
-The ChartMuseum host is site infrastructure, named only in untracked operator
-configuration; no committed document carries a real chart-registry hostname.
-
-## 10. Production deltas
-
-- Set every password explicitly at install time; no generated default flows out.
-- Override the nfs-csi lab defaults (NFS server/share, image coordinates) with
-  `values-prod.yaml`; narrow NFS sources and remove `no_root_squash`.
-- Private Harbor projects with per-namespace pull secrets; default-deny
-  NetworkPolicy; firewall per the [bootstrap guide](cluster-bootstrap.md) §3.2.
-- Replace bootstrap/admin accounts and rotate NereidEdge gateway credentials
-  one secret per gateway.
-
-## 11. Troubleshooting
+- every selected chart/image version and source commit is recorded;
+- Identity discovery, Sphere login, and product SSO redirects succeed;
+- every product certificate chains to the intended CA;
+- Link uses Forge SeaweedFS and its bucket survives an application restart;
+- MQTT connect, heartbeat, and telemetry succeed with one edge-specific
+  credential pair; and
+- the ESS object ID, SHA-256, edge receipt, and inference result are recorded
+  independently of the service agreement.
 
 | Symptom | Check |
 |---|---|
-| Chart fails with `required` message | A secret/value field is empty in the values file; the message names it (§5). |
-| `ImagePullBackOff` on a product pod | Node containerd mirror (§2.5) or the namespace pull secret (§3.2); confirm the image exists in Harbor. |
-| Product cannot validate another product's TLS | The `nereid-internal-ca-tls` copy is missing in that namespace (§3.3); check the chart's CA secret key `ca.crt`. |
-| Certificate stays `False`/not issued | `kubectl get clusterissuer`; `internal-ca` must be Ready (§4.2); inspect cert-manager logs. |
-| PVC Pending on nfs-csi | `nfs-csi` StorageClass exists (§4.3); node `mount.nfs` present; NFS export reachable on TCP 2049. |
-| Gateway never connects | NodePort 31883/31884 open; one-time Link gateway token regenerated if re-registered. |
+| OCI pull fails anonymously | Confirm the exact version is listed in §1 or has separately passed public verification; check outbound GHCR access. |
+| Chart rendering names a missing required value | Complete the named field in the site's values file; do not substitute a shared placeholder. |
+| `ImagePullBackOff` | Compare the Pod's image/tag with the selected chart `appVersion` and verify public registry/DNS access from that node. |
+| TLS verification fails | Confirm the Ingress host/SAN and copy the current CA public certificate into the consumer namespace. |
+| PVC remains pending | Check the selected StorageClass, NFS export, node NFS client, and whether the workload requires node-local block storage. |
+| Link cannot create its bucket | Stop and verify Forge SeaweedFS health, endpoint, exact credentials, bucket policy, and TLS mode. |
+| Edge agreement exists but no telemetry | Check NereidEdge-to-Link credentials, edge ID, device map, MQTT reachability, and service logs. |
+| Edge service is healthy but the model is absent | Perform the independent ESS delivery and verify its object ID and SHA-256. |
