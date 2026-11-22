@@ -1,83 +1,86 @@
 # GPU Device Plugins (NVIDIA / AMD / Intel)
 
-A device plugin does one thing: advertise the node's GPUs to the kubelet as Kubernetes extended
+A device plugin advertises node hardware to the kubelet as Kubernetes extended
 resources:
 
-- `nvidia.com/gpu`
-- `amd.com/gpu`
-- `gpu.intel.com/i915` (legacy i915 KMD; integrated/older discrete GPUs), `gpu.intel.com/xe`
-  (new xe KMD; Battlemage and newer)
+- `nvidia.com/gpu`;
+- `amd.com/gpu`;
+- `gpu.intel.com/i915` for the legacy i915 kernel driver; and
+- `gpu.intel.com/xe` for the xe kernel driver used by newer Intel GPUs.
 
-> Migrated from the NereidForge repository on 2026-10-19 and completed with all three vendors'
-> artifacts. Product repositories no longer install device plugins; the vendor userspace stacks
-> inside training images (CUDA/ROCm userspace, NEO/Level Zero) are out of scope for this file —
-> see each product's ADRs.
+Install only the plugins matching the prepared hardware. Product repositories
+preflight these resources but do not install cluster device plugins themselves.
+Vendor userspace stacks inside training images are outside this guide.
 
-| Vendor | Artifact | Image | Image status |
-|---|---|---|---|
-| NVIDIA | [`nvidia-gpu-plugin.yaml`](nvidia-gpu-plugin.yaml) | `<harbor-host>/nvidia/k8s-device-plugin:v0.17.1` | In Harbor (mirrored 2026-10-19) |
-| AMD | [`amd-gpu-plugin.yaml`](amd-gpu-plugin.yaml) | `<harbor-host>/rocm/k8s-device-plugin:1.31.0.10` | In Harbor (mirrored 2026-10-19) |
-| Intel | [`intel/`](intel/) (NFD + rules + GPU/NPU plugins) | `intel-gpu-plugin:0.36.0`, `intel-npu-plugin:0.36.0`, `nfd/node-feature-discovery:v0.17.1` | All in Harbor (verified 2026-10-19) |
+## Public artifacts
 
-The manifests are vendored copies of the upstream official manifests/kustomize (air-gapped
-artifacts; installation never reaches github/helm repo), modified only for suite differences such
-as the image address. When upgrading versions, replace the artifacts, images, and `images.md`
-together; do not write install commands outside this directory.
+| Vendor | Manifest | Pinned public images |
+|---|---|---|
+| NVIDIA | [`nvidia-gpu-plugin.yaml`](nvidia-gpu-plugin.yaml) | `nvcr.io/nvidia/k8s-device-plugin:v0.17.1` |
+| AMD | [`amd-gpu-plugin.yaml`](amd-gpu-plugin.yaml) | `docker.io/rocm/k8s-device-plugin:1.31.0.10` |
+| Intel | [`intel/`](intel/) | `docker.io/intel/intel-gpu-plugin:0.36.0`, `docker.io/intel/intel-npu-plugin:0.36.0`, `registry.k8s.io/nfd/node-feature-discovery:v0.17.1` |
 
-## 0. Node prerequisites (a plugin that will not install is usually missing one of these)
+These are vendored copies of official upstream manifests and Kustomize
+artifacts. They retain public image coordinates. When upgrading, update the
+manifests and all corresponding pinned versions together, then verify manifest
+rendering, anonymous image retrieval, and the resource names below.
+
+Run the commands from this `device-plugins` directory.
+
+## 1. Node prerequisites
 
 | Vendor | Host requirement | Container-runtime requirement |
 |---|---|---|
-| NVIDIA | Kernel driver (`nvidia-smi` works) | Install **nvidia-container-toolkit** and run `nvidia-ctk runtime configure` for containerd |
-| AMD | `amdgpu` kernel driver (matching ROCm version; the node exposes `/dev/kfd`, `/dev/dri/renderD*`) | The plugin is a privileged DaemonSet (enumerating device nodes under `/sys`); the node's default containerd is sufficient |
-| Intel | i915/xe KMD (Battlemage needs NEO ≥ 26; userspace apt via the PPA `kobuk-team/intel-graphics`) | render-node permissions; the userspace compute stack lives inside training images, not on the host |
+| NVIDIA | Working kernel driver; `nvidia-smi` succeeds | Install `nvidia-container-toolkit`, configure containerd with `nvidia-ctk runtime configure`, and restart containerd |
+| AMD | Matching `amdgpu` kernel driver; `/dev/kfd` and `/dev/dri/renderD*` are present | The privileged plugin DaemonSet enumerates device nodes under `/sys`; the default containerd configuration is sufficient |
+| Intel | i915/xe kernel driver and the userspace version required by the selected GPU | Correct render-node permissions; compute userspace remains in the workload images |
 
-## 1. NVIDIA — k8s-device-plugin v0.17.1
+Stop if the host driver or device nodes are absent. Applying a plugin does not
+install or repair a host driver.
 
-Prerequisite: the node has the NVIDIA driver and nvidia-container-toolkit installed and containerd
-restarted.
+## 2. NVIDIA — k8s-device-plugin v0.17.1
 
 ```bash
 kubectl apply -f nvidia-gpu-plugin.yaml
 ```
 
-The manifest includes a `nvidia.com/gpu:NoSchedule` toleration and `system-node-critical`
-priority. When GPU time-slicing is needed (sharing one card between training and serving),
-configure a separate config file; that is site policy and not part of the shared defaults.
+The manifest includes a `nvidia.com/gpu:NoSchedule` toleration and
+`system-node-critical` priority. GPU time-slicing is site policy and requires a
+separate, deliberately reviewed configuration.
 
-## 2. AMD — ROCm k8s-device-plugin v1.31.0.10
+## 3. AMD — ROCm k8s-device-plugin v1.31.0.10
 
 ```bash
 kubectl apply -f amd-gpu-plugin.yaml
 ```
 
-The upstream manifest is itself a privileged Pod (mounting `/sys` and the kubelet device-plugins
-directory). Do not "fix" it by de-privileging — without privilege the plugin cannot enumerate GPUs.
+The upstream workload is privileged and mounts `/sys` plus the kubelet
+device-plugin directory. Those permissions are required for GPU enumeration.
 
-## 3. Intel — GPU plugin 0.36.0 (NFD-based, the only supported path)
+## 4. Intel — GPU/NPU plugins 0.36.0 with NFD
 
-The Intel plugin **must be installed together with NFD (Node Feature Discovery)**: NFD detects
-GPUs/NPUs and labels nodes with `intel.feature.node.kubernetes.io/gpu=true`,
-`intel.feature.node.kubernetes.io/npu=true`, and similar labels; the plugin DaemonSet schedules
-only onto labeled nodes. Do not use a bare DaemonSet that unconditionally starts a Pod on every
-amd64 node.
+Install Node Feature Discovery (NFD) and its rules before the Intel plugins. NFD
+labels suitable nodes, including
+`intel.feature.node.kubernetes.io/gpu=true` and
+`intel.feature.node.kubernetes.io/npu=true`; the plugin DaemonSets use those
+labels instead of starting on every amd64 node.
 
-Vendored under [`intel/`](intel/) (NFD brings its own `node-feature-discovery` namespace; the
-plugin DaemonSet is fixed to `kube-system`):
+NFD creates its own `node-feature-discovery` namespace. The Intel plugin
+DaemonSets remain in `kube-system`.
 
 ```bash
-# 1) NFD v0.17.1 (CRDs, master Deployment, worker DaemonSet, gc)
+# NFD v0.17.1: CRDs, master Deployment, worker DaemonSet, and garbage collector.
 kubectl apply -f intel/nfd.yaml
-# 2) Intel GPU/NPU NodeFeatureRules (cluster-level rules; labels gpu/npu etc.)
+# Intel GPU/NPU NodeFeatureRules.
 kubectl apply -f intel/node-feature-rules.yaml
-# 3) GPU plugin 0.36.0 (shared-dev-num=10 + balanced allocation + monitoring)
+# Intel GPU plugin 0.36.0.
 kubectl apply -f intel/intel-gpu-plugin.yaml
-# 4) NPU plugin 0.36.0 (optional, if nodes have an Intel NPU)
+# Optional: install only when Intel NPUs are present.
 kubectl apply -f intel/intel-npu-plugin.yaml
 ```
 
-Corresponding upstream kustomize refs (provenance only; do not fetch them at deploy time in an
-air-gapped environment):
+The vendored artifacts correspond to these upstream Kustomize paths at the
+plugin release:
 
 ```text
 deployments/nfd?ref=v0.36.0
@@ -85,44 +88,39 @@ deployments/nfd/overlays/node-feature-rules?ref=v0.36.0
 deployments/gpu_plugin/overlays/monitoring_shared-dev_nfd?ref=v0.36.0
 ```
 
-Suite-fixed parameters (deltas from the upstream overlay):
+Suite-specific GPU settings are:
 
-- `-shared-dev-num=10`: each physical GPU is advertised as 10 shareable devices, allowing GPU
-  resource slicing later (Forge's GPU-capacity interface reads exactly this allocatable number).
-- `-allocation-policy=balanced`: spread independent containers across physical GPUs instead of
-  letting kubelet fill the first available shared devices; each single-device job still uses its
-  own container-local `xpu:0`.
-- `-enable-monitoring`: additionally registers the `gpu.intel.com/monitoring` resource (one per
-  node, for monitoring workloads).
-- Images go through Harbor; `i915` (integrated/older discrete) and `xe` (Battlemage/Arc discrete)
-  are registered as different resources, so requesting `gpu.intel.com/xe` naturally schedules only
-  onto discrete GPUs — no PCI allowlist needed.
+- `-shared-dev-num=10`: advertise ten shareable resources per physical GPU;
+- `-allocation-policy=balanced`: spread independent containers across physical
+  GPUs; and
+- `-enable-monitoring`: expose one `gpu.intel.com/monitoring` resource per node.
 
-Live verification 2026-10-19 (2 server nodes):
+The i915 and xe resource names are distinct, so requesting
+`gpu.intel.com/xe` restricts scheduling to compatible xe-backed nodes.
 
-| Node | GPU | i915 | xe | monitoring |
-|---|---|---|---|---|
-| node-1 | Meteor Lake integrated | 10 | - | 1 |
-| node-2 | Arrow Lake integrated + 2× Arc B580 | 10 | 20 | 1 |
+## 5. Verification
 
-NFD also labels NPU-equipped nodes with `intel.feature.node.kubernetes.io/npu=true`; if Intel NPUs
-are present, install step 4's `intel-npu-plugin.yaml`.
-
-## 4. Verification (common to all three vendors)
+Wait for the selected workloads, then inspect labels, capacity, and logs:
 
 ```bash
-# Intel: inspect NFD labels first
+kubectl -n node-feature-discovery rollout status deployment/nfd-master --timeout=180s
+kubectl -n kube-system rollout status daemonset/intel-gpu-plugin --timeout=180s
+
 kubectl get nodes -o json | python3 -c "
 import json,sys
 for n in json.load(sys.stdin)['items']:
-    l=n['metadata']['labels']; c=n['status']['capacity']
-    print(n['metadata']['name'], 'gpu-label=', l.get('intel.feature.node.kubernetes.io/gpu'),
-          'i915=', c.get('gpu.intel.com/i915','-'), 'xe=', c.get('gpu.intel.com/xe','-'))"
+    labels=n['metadata']['labels']; capacity=n['status']['capacity']
+    print(n['metadata']['name'],
+          'gpu-label=', labels.get('intel.feature.node.kubernetes.io/gpu'),
+          'i915=', capacity.get('gpu.intel.com/i915','-'),
+          'xe=', capacity.get('gpu.intel.com/xe','-'))"
 
-# NVIDIA/AMD/Intel common: success means the corresponding extended resource appears in capacity
-# (resource names contain a slash; use -o json when custom-columns cannot show them)
 kubectl get ds -n kube-system | grep -E 'nvidia-device-plugin|amdgpu-device-plugin|intel-gpu-plugin'
-kubectl -n kube-system logs -l name=nvidia-device-plugin-ds --tail=20    # NVIDIA
-kubectl -n kube-system logs -l name=amdgpu-dp-ds --tail=20               # AMD
-kubectl -n kube-system logs -l app=intel-gpu-plugin --tail=20            # Intel
+kubectl -n kube-system logs -l name=nvidia-device-plugin-ds --tail=20
+kubectl -n kube-system logs -l name=amdgpu-dp-ds --tail=20
+kubectl -n kube-system logs -l app=intel-gpu-plugin --tail=20
 ```
+
+Run only the rollout/log commands for installed components. Acceptance requires
+the expected extended resources in node capacity and healthy plugin Pods on the
+intended hardware nodes. Record this evidence before installing Forge.

@@ -2,18 +2,12 @@
 # Copyright (C) 2026 YIQISOFT
 # SPDX-License-Identifier: Apache-2.0
 
-# Per-component install hook: kustomize build the upstream target(s) with the
-# private-registry component, rewrite residual public image refs, then apply.
+# Per-component install hook: build public upstream target(s), substitute the
+# operator-supplied Dex settings, then apply the rendered resources.
 set -euo pipefail
 
 MANIFESTS_DIR="${MANIFESTS_DIR:-/manifests}"
-# Treaty §18: no committed internal registry hostname. An empty domain skips
-# image rewriting entirely and leaves public coordinates for the node-level
-# containerd mirror. Legacy flows that still need manifest-time rewriting
-# inject REGISTRY_DOMAIN/REGISTRY_PROJECT from the operator environment.
-REGISTRY_DOMAIN="${REGISTRY_DOMAIN:-}"
-REGISTRY_PROJECT="${REGISTRY_PROJECT:-nereidai}"
-DEX_STATIC_EMAIL="${DEX_STATIC_EMAIL:-admin@nereidforge.local}"
+DEX_STATIC_EMAIL="${DEX_STATIC_EMAIL:-admin@example.org}"
 DEX_STATIC_PASSWORD_HASH="${DEX_STATIC_PASSWORD_HASH:-}"
 TARGETS="${TARGETS:?TARGETS required}"
 
@@ -29,8 +23,6 @@ open(os.path.join(wfp, "kustomization.yaml"), "w").write(
     "apiVersion: kustomize.config.k8s.io/v1beta1\n"
     "kind: Kustomization\n"
     "resources:\n" + res + "\n"
-    "components:\n"
-    "- ../common/private-registry\n"
 )
 PY
 
@@ -41,22 +33,6 @@ if ! kustomize build "$WFP_DIR" > "$rendered"; then
   exit 1
 fi
 
-if [ -n "$REGISTRY_DOMAIN" ]; then
-  PRIV="$REGISTRY_DOMAIN/$REGISTRY_PROJECT"
-  sed -i -E \
-    -e "s#quay.io/jetstack/cert-manager-acmesolver:v1.21.1#${PRIV}/jetstack/cert-manager-acmesolver:v1.21.1#g" \
-    -e "s#registry.istio.io/release#${PRIV}/release#g" \
-    -e "s#image: busybox:1\.28#image: ${PRIV}/library/busybox:1.28#g" \
-    -e "s#gcr.io/knative-releases/#${PRIV}/knative-releases/#g" \
-    -e "s#ghcr.io/containerd/busybox#${PRIV}/containerd/busybox#g" \
-    -e "s#ghcr.io/kubeflow/kfp-driver:2\.17\.0#${PRIV}/kubeflow/kfp-driver:2.17.0#g" \
-    -e "s#ghcr.io/kubeflow/kfp-launcher:2\.17\.0#${PRIV}/kubeflow/kfp-launcher:2.17.0#g" \
-    -e "s#ghcr.io/kubeflow/kfp-frontend#${PRIV}/kubeflow/kfp-frontend:2.17.0#g" \
-    -e "s#ghcr.io/kubeflow/katib/#${PRIV}/kubeflow/katib/#g" \
-    -e "s#ghcr.io/kubeflow/kubeflow/notebook-servers/#${PRIV}/kubeflow/kubeflow/notebook-servers/#g" \
-    -e "s#quay.io/argoproj/argoexec:v4\.0\.5#${PRIV}/argoproj/argoexec:v4.0.5#g" \
-    "$rendered"
-fi
 sed -i -E \
   -e "s#^  DEX_USER_PASSWORD: .*#  DEX_USER_PASSWORD: ${DEX_STATIC_PASSWORD_HASH}#" \
   -e "s#email: user@example.com#email: ${DEX_STATIC_EMAIL}#g" \

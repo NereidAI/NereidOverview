@@ -1,9 +1,7 @@
-# Vendored render of upstream kustomize (air-gapped, do not apply from github at deploy time):
+# Vendored render of upstream kustomize:
 #   intel-device-plugins-for-kubernetes v0.36.0, deployments/nfd
-# which pulls node-feature-discovery v0.17.1 (upstream default overlay).
-# Rendered 2026-10-19. The image keeps its public upstream coordinate;
-# air-gapped nodes resolve it through the containerd Harbor mirror
-# (see deploy/prereqs/images.txt).
+# which selects node-feature-discovery v0.17.1 (upstream default overlay).
+# Rendered 2026-10-19. The image keeps its public upstream coordinate.
 apiVersion: v1
 kind: Namespace
 metadata:

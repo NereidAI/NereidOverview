@@ -1,4 +1,4 @@
-# Vendored render of upstream kustomize (air-gapped):
+# Vendored render of upstream kustomize:
 #   intel-device-plugins-for-kubernetes v0.36.0,
 #   deployments/nfd/overlays/node-feature-rules
 # Renders the cluster-scoped NodeFeatureRules that label GPU/NPU nodes

@@ -21,10 +21,6 @@ spec:
           env:
             - name: MANIFESTS_DIR
               value: /manifests
-            - name: REGISTRY_DOMAIN
-              value: {{ .Values.global.registry.domain | quote }}
-            - name: REGISTRY_PROJECT
-              value: {{ .Values.global.registry.project | quote }}
             - name: DEX_STATIC_EMAIL
               value: {{ .Values.global.dex.staticEmail | quote }}
             - name: DEX_STATIC_PASSWORD_HASH

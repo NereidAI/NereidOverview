@@ -4,8 +4,8 @@
 # placeholder that renders for linting only. Every deployment must supply
 # its own NFS server/share through a site overlay (see values-prod.yaml for
 # the required skeleton); rendering fails on an empty server or share.
-# Image refs/tags are pinned per deploy/prereqs/images.md (csi-driver-nfs
-# v4.7.0).
+# Image references and tags are pinned to the public csi-driver-nfs v4.7.0
+# dependency below.
 nfs:
   nfs:
     # Placeholder only; replace via a site overlay, never by editing this file.
@@ -32,8 +32,7 @@ nfs:
   externalSnapshotter:
     enabled: false
   image:
-    # Public upstream coordinates (deploy-standards §15.3); air-gapped nodes resolve
-    # them through the containerd Harbor mirror, never via a chart override.
+    # Public upstream coordinates; cluster nodes pull them directly.
     baseRepo: "registry.k8s.io/sig-storage"
     nfs:
       repository: "/nfsplugin"
