@@ -14,45 +14,52 @@ truth.
 > and Horizon) and stop at §7. Do not install Link until a complete Forge release has passed the gate
 > and supplied healthy SeaweedFS credentials.
 
-## 1. Verified versions and installation scope
+## 1. Verified development channel and installation scope
 
-These immutable Lab/POC versions passed anonymous chart pull/render and
+These floating development selectors passed anonymous chart pull/render and
 image-manifest verification on 2026-11-22:
 
-| Product | OCI chart | Version | Source commit |
-|---|---|---|---|
-| Identity | `oci://ghcr.io/nereidai/charts/nereididentity` | `0.0.0-dev-7c2797d` | `7c2797ddec13d6fcef72a535069738d247173e61` |
-| Sphere | `oci://ghcr.io/nereidai/charts/nereidsphere` | `0.0.0-dev-90379cb` | `90379cbec953c51b5807cf60f53c17fb736da1ff` |
-| Horizon | `oci://ghcr.io/nereidai/charts/nereidhorizon` | `0.0.0-dev-05aaf97` | `05aaf97bb5d3119f00ccc2ea90d3e8bb86dda49d` |
-| Link | `oci://ghcr.io/nereidai/charts/nereidlink` | `0.0.0-dev-6da29bd` | `6da29bdca204510bd4b8560c503ead28bc231c0b` |
+| Product | OCI chart | Development selector |
+|---|---|---|
+| Identity | `oci://ghcr.io/nereidai/charts/nereididentity` | `0.0.0-dev` |
+| Sphere | `oci://ghcr.io/nereidai/charts/nereidsphere` | `0.0.0-dev` |
+| Horizon | `oci://ghcr.io/nereidai/charts/nereidhorizon` | `0.0.0-dev` |
+| Link | `oci://ghcr.io/nereidai/charts/nereidlink` | `0.0.0-dev` |
 
-Each chart's `version` and `appVersion` are identical, and its suite images use
-that same version. Third-party images retain their public upstream coordinates
+The [dated evidence snapshot](reference/development-artifacts-2026-11-22.md)
+binds that verification to the exact resolved chart versions/digests and image
+index digests. It is historical evidence, not a per-commit installation pin.
+
+A floating chart tag aliases the latest successfully published immutable
+`0.0.0-dev-<short-sha>` OCI manifest. The downloaded archive retains that
+short-SHA chart `version` and `appVersion`, so its suite images use the same
+immutable snapshot. Third-party images retain their public upstream coordinates
 and pinned versions.
 
-The floating `0.0.0-dev` version is not reproducible. For a formal deployment,
-replace every version below with the same selected bare-SemVer release only
-after that exact chart and all its images have passed anonymous verification.
-Do not infer a release version from these examples.
-
-Set the verified Lab/POC selections explicitly:
+Set the normal development selections once; no per-commit version edit is
+needed:
 
 ```bash
-export NEREIDIDENTITY_VERSION=0.0.0-dev-7c2797d
-export NEREIDSPHERE_VERSION=0.0.0-dev-90379cb
-export NEREIDHORIZON_VERSION=0.0.0-dev-05aaf97
-export NEREIDLINK_VERSION=0.0.0-dev-6da29bd
+export NEREIDIDENTITY_VERSION=0.0.0-dev
+export NEREIDSPHERE_VERSION=0.0.0-dev
+export NEREIDHORIZON_VERSION=0.0.0-dev
+export NEREIDLINK_VERSION=0.0.0-dev
 ```
 
-Record these versions, their source commits, the selected kubecontext, and the
-installation date in the deployment hand-off.
+Record each resolved chart OCI digest and internal version, the running image
+IDs/digests, selected kubecontext, and installation date in the deployment
+hand-off. For deliberate reproduction, replace a floating selector with its
+resolved `0.0.0-dev-<short-sha>` version only after anonymously verifying that
+snapshot. For a formal deployment, use a selected bare-SemVer release only
+after that exact chart and all its images have passed anonymous verification.
+Do not infer a release version from these examples.
 
 ## 2. Operator environment
 
 Required tools on the operator host: Helm with OCI support, `kubectl`, `tar`,
-`curl`, and `openssl`. The operator host and every cluster node must reach all
-public artifact registries referenced by the charts. DNS and TLS must be valid
-for every product endpoint.
+`curl`, `openssl`, and Python 3 with PyYAML. The operator host and every cluster
+node must reach all public artifact registries referenced by the charts. DNS and
+TLS must be valid for every product endpoint.
 
 Run the shell examples from the NereidOverview repository root. Keep all site
 state outside Git:
@@ -61,11 +68,72 @@ state outside Git:
 export DEPLOYMENT_ROOT="${DEPLOYMENT_ROOT:-$HOME/.nereidai-deployment}"
 export DEPLOY_VALUES_ROOT="$DEPLOYMENT_ROOT/deploy-values"
 export DEPLOY_LOG_ROOT="$DEPLOYMENT_ROOT/deploy-logs"
+umask 077
 install -d -m 700 "$DEPLOYMENT_ROOT" "$DEPLOY_VALUES_ROOT" "$DEPLOY_LOG_ROOT" \
   "$DEPLOYMENT_ROOT/chart-archives"
 for product in nereididentity nereidsphere nereidhorizon nereidforge nereidlink; do
   install -d -m 700 "$DEPLOY_VALUES_ROOT/$product" "$DEPLOY_LOG_ROOT/$product"
 done
+
+# Resolve a floating selector once. The log records its OCI digest and internal
+# version; only the archive path is returned for use by values and installation.
+pull_nereid_chart() (
+  set -euo pipefail
+  local product="$1" selector="$2" pull_dir archive
+  pull_dir="$(mktemp -d "$DEPLOYMENT_ROOT/chart-archives/${product}.XXXXXX")"
+  helm pull "oci://ghcr.io/nereidai/charts/${product}" \
+    --version "$selector" --destination "$pull_dir" 2>&1 \
+    | tee "$DEPLOY_LOG_ROOT/$product/chart-pull.txt" >&2
+  archive="$(find "$pull_dir" -maxdepth 1 -type f -name "${product}-*.tgz" -print -quit)"
+  test -s "$archive"
+  helm show chart "$archive" | tee "$DEPLOY_LOG_ROOT/$product/chart-metadata.txt" >&2
+  printf '%s\n' "$archive"
+)
+
+record_nereid_images() (
+  set -euo pipefail
+  local product="$1" pod_json
+  pod_json="$(mktemp "$DEPLOY_LOG_ROOT/$product/pods.XXXXXX.json")"
+  trap 'rm -f "$pod_json"' EXIT
+  kubectl -n "$product" get pods -o json > "$pod_json"
+  python3 - "$pod_json" <<'PY' | tee "$DEPLOY_LOG_ROOT/$product/image-digests.txt"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    pods = json.load(source).get("items")
+if not isinstance(pods, list) or not pods:
+    raise SystemExit("no pods found; refusing to record empty image evidence")
+
+lines = []
+for pod in pods:
+    pod_name = pod.get("metadata", {}).get("name", "<unnamed>")
+    spec = pod.get("spec", {})
+    status = pod.get("status", {})
+    for field, status_field, label in (
+        ("initContainers", "initContainerStatuses", "initContainer"),
+        ("containers", "containerStatuses", "container"),
+    ):
+        statuses = {
+            item.get("name"): item
+            for item in status.get(status_field, [])
+            if isinstance(item, dict)
+        }
+        for container in spec.get(field, []) or []:
+            name = container.get("name", "")
+            image = container.get("image", "")
+            image_id = statuses.get(name, {}).get("imageID", "")
+            if not name or not image or "sha256:" not in image_id:
+                raise SystemExit(
+                    f"missing image or image digest for {pod_name} {label}/{name or '<unnamed>'}; "
+                    "wait for image pulls and ready status before recording evidence"
+                )
+            lines.append(f"{pod_name}\n  {label}/{name} image={image}\n  {label}/{name} imageID={image_id}")
+if not lines:
+    raise SystemExit("no containers found; refusing to record empty image evidence")
+print("\n".join(lines))
+PY
+)
 
 kubectl config current-context
 kubectl get nodes
@@ -103,18 +171,59 @@ kubectl create namespace nereidhorizon
 # Forge owns its installation namespaces; create Link only after Forge passes §7.
 ```
 
-## 3. Secret policy
+## 3. Secret generation and policy
 
-- Generate every password, OIDC client secret, session key, and object-store
-  credential independently, for example with `openssl rand -hex 32`. Where a
-  chart generates a value once, retain and archive that generated value instead.
-- Use a separate secret for each field; never reuse a product client secret as
-  a session key or database password.
-- Keep values files at mode `0600` under `$DEPLOY_VALUES_ROOT` and store an
-  encrypted backup in the operator's password vault.
-- Do not print secrets in acceptance output or shell tracing.
-- Values shown as `<...>` are instructions to supply a value, not literals to
-  install.
+Initialize the operator-supplied secrets once:
+
+```bash
+python3 scripts/generate-suite-secrets.py init \
+  --deployment-root "$DEPLOYMENT_ROOT"
+```
+
+The tool creates `$DEPLOYMENT_ROOT/secret-store/suite-secrets.json` with mode
+`0600` inside a mode-`0700` directory. It prints paths and counts, never secret
+values. Running `init` again preserves every existing value and only adds fields
+introduced by a newer tool version. Keep an encrypted off-cluster backup of this
+store. Do not delete it during an upgrade or attempt to use it as a rotation
+tool.
+
+Keep non-secret site configuration in each product's `site-values.yaml`. After
+editing that file, render a separate private values file:
+
+```bash
+python3 scripts/generate-suite-secrets.py render \
+  --deployment-root "$DEPLOYMENT_ROOT" \
+  --product nereididentity \
+  --input "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
+```
+
+The default output is `values.generated.yaml` beside the input. Use that
+generated file for Helm, never the site file. After changing site configuration,
+repeat the same command with `--force`; this replaces only the generated values
+and does not rotate secrets. Do not edit the generated file manually.
+
+The generator shares a credential only where two products must use the exact
+same contract, such as Identity's Sphere client secret and Sphere's OIDC client
+secret. Database passwords, session/JWT keys, and product ticket secrets remain
+independent. It also injects optional direct-OIDC secrets when those modes are
+enabled.
+
+The tool does not invent external credentials. Link rendering additionally
+requires a mode-`0600` Forge hand-off containing exactly `accessKey` and
+`secretKey`; pass it with `--forge-credentials`. The tool rejects extra keys and
+angle-bracket placeholders, but only the preceding Forge health gate proves
+that the supplied credentials are valid. Malformed YAML errors report the path
+and line/column without reproducing source text. Open Horizon administrator
+credentials, external database/Valkey credentials, and license material remain
+operator-supplied. cert-manager generates the suite CA, Link generates its own
+device CA, and Horizon retains its chart-generated session encryption key.
+
+- Keep all values, hand-offs, and the secret store outside Git with mode `0600`.
+- Never pass secrets through Helm `--set`, shell tracing, acceptance output, or
+  deployment logs.
+- Replace non-secret `<...>` placeholders with actual site values. Secret
+  placeholders in the examples are overwritten by the generator; Forge's
+  credential hand-off must contain real values, not placeholders.
 
 ## 4. Phase 0 — shared prerequisites
 
@@ -203,43 +312,43 @@ copy before installation:
 
 ```bash
 install -d -m 700 "$DEPLOY_VALUES_ROOT/nereididentity"
-helm pull oci://ghcr.io/nereidai/charts/nereididentity \
-  --version "$NEREIDIDENTITY_VERSION" \
-  --destination "$DEPLOYMENT_ROOT/chart-archives"
-test -s "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml" || \
-  tar -xOzf "$DEPLOYMENT_ROOT/chart-archives/nereididentity-${NEREIDIDENTITY_VERSION}.tgz" \
+NEREIDIDENTITY_CHART="$(pull_nereid_chart nereididentity "$NEREIDIDENTITY_VERSION")"
+test -s "$NEREIDIDENTITY_CHART"
+test -s "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml" || \
+  tar -xOzf "$NEREIDIDENTITY_CHART" \
     nereididentity/values-k3s-example.yaml \
-    > "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml"
-chmod 600 "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml"
+    > "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
+chmod 600 "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
+# Set real hosts and identity fields in site-values.yaml, then inject secrets.
+python3 scripts/generate-suite-secrets.py render \
+  --deployment-root "$DEPLOYMENT_ROOT" \
+  --product nereididentity \
+  --input "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
 ```
 
-Supply these required values with unique strong secrets:
+The generator supplies these required values with unique strong secrets:
 
 - `postgresql.bootstrap.password`;
 - `identity.admin.password`;
 - `identity.adminClient.secret`;
 - `identity.clients.nereidsphere.secret`;
 - `identity.clients.nereidhorizon.secret`;
-- `identity.clients.nereidforge.secret`; and
-- `identity.clients.nereidlink.secret`.
+- `identity.clients.nereidforge.secret`;
+- `identity.clients.nereidlink.secret`; and
+- `identity.suiteAdmin.password`.
 
 Keep `identity.seedUsers=false`. Set the SSO Ingress host and every product
 redirect/web origin to the planned `example.org` replacements. Set the
-`identity.suiteAdmin` identity fields deliberately. Either supply a unique
-strong `identity.suiteAdmin.password`, or leave only that password empty so the
-chart generates it once on first installation. The generated value is retained
-in Secret `nereididentity-realm`, key `suite-admin-password`; retrieve and store
-it securely after installation. An explicit password is used only when the
-suite-admin user is first created.
+`identity.suiteAdmin` identity fields deliberately. The explicit generated
+password is used only when the suite-admin user is first created; preserve the
+secret store so later renders do not replace it with a different value.
 
 Install and verify:
 
 ```bash
-helm upgrade --install nereididentity \
-  oci://ghcr.io/nereidai/charts/nereididentity \
-  --version "$NEREIDIDENTITY_VERSION" \
+helm upgrade --install nereididentity "$NEREIDIDENTITY_CHART" \
   --namespace nereididentity --create-namespace --skip-crds --timeout 10m \
-  --values "$DEPLOY_VALUES_ROOT/nereididentity/values.yaml"
+  --values "$DEPLOY_VALUES_ROOT/nereididentity/values.generated.yaml"
 kubectl -n nereididentity get clusters.postgresql.cnpg.io
 kubectl -n nereididentity get pods
 curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
@@ -249,15 +358,17 @@ curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
 
 Stop until the CNPG cluster, Keycloak, and bootstrap hook are healthy and the
 issuer document returns successfully. Do not continue after a failed Helm hook.
+Once all pods are Ready, run `record_nereid_images nereididentity` and archive
+its output with the chart-pull and chart-metadata logs.
 
 ## 6. Phase 2 — NereidSphere and NereidHorizon
 
 ### 6.1 NereidSphere
 
 For a single-replica Lab/POC, create
-`$DEPLOY_VALUES_ROOT/nereidsphere/values.yaml` with the following structure.
-Replace all domains and secrets. `config.session.secretKey` must be exactly 32
-bytes; `openssl rand -hex 16` produces 32 ASCII characters.
+`$DEPLOY_VALUES_ROOT/nereidsphere/site-values.yaml` with the following structure.
+Replace all domains. The generator supplies every secret, including a
+`config.session.secretKey` of exactly 32 ASCII bytes.
 
 ```yaml
 replicaCount: 1
@@ -318,19 +429,25 @@ config:
 ```
 
 For a multi-replica deployment, retain the built-in Valkey topology, set
-`valkey.enabled=true`, supply `valkey.auth.password`, and use the Valkey ticket
-replay store. Do not use the in-memory replay store with multiple replicas.
+`valkey.enabled=true`, and use the Valkey ticket replay store. The generator
+supplies `valkey.auth.password` unless an existing Secret is selected. Do not
+use the in-memory replay store with multiple replicas.
 
 ```bash
-chmod 600 "$DEPLOY_VALUES_ROOT/nereidsphere/values.yaml"
-helm upgrade --install nereidsphere \
-  oci://ghcr.io/nereidai/charts/nereidsphere \
-  --version "$NEREIDSPHERE_VERSION" \
+chmod 600 "$DEPLOY_VALUES_ROOT/nereidsphere/site-values.yaml"
+NEREIDSPHERE_CHART="$(pull_nereid_chart nereidsphere "$NEREIDSPHERE_VERSION")"
+test -s "$NEREIDSPHERE_CHART"
+python3 scripts/generate-suite-secrets.py render \
+  --deployment-root "$DEPLOYMENT_ROOT" \
+  --product nereidsphere \
+  --input "$DEPLOY_VALUES_ROOT/nereidsphere/site-values.yaml"
+helm upgrade --install nereidsphere "$NEREIDSPHERE_CHART" \
   --namespace nereidsphere --create-namespace --timeout 5m \
-  --values "$DEPLOY_VALUES_ROOT/nereidsphere/values.yaml"
+  --values "$DEPLOY_VALUES_ROOT/nereidsphere/values.generated.yaml"
 kubectl -n nereidsphere rollout status deploy/nereidsphere --timeout=240s
 curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
   https://nereidsphere.example.org/readyz
+record_nereid_images nereidsphere
 ```
 
 Stop until readiness succeeds and an unauthenticated browser visit reaches the
@@ -338,7 +455,7 @@ Identity login flow.
 
 ### 6.2 NereidHorizon
 
-Create `$DEPLOY_VALUES_ROOT/nereidhorizon/values.yaml`. The chart generates a
+Create `$DEPLOY_VALUES_ROOT/nereidhorizon/site-values.yaml`. The chart generates a
 64-hex-character session encryption key on first installation and retains it in
 the release Secret on upgrades; archive that Secret securely.
 
@@ -370,18 +487,23 @@ ingress:
 Install both application tiers and verify the API:
 
 ```bash
-chmod 600 "$DEPLOY_VALUES_ROOT/nereidhorizon/values.yaml"
-helm upgrade --install nereidhorizon \
-  oci://ghcr.io/nereidai/charts/nereidhorizon \
-  --version "$NEREIDHORIZON_VERSION" \
+chmod 600 "$DEPLOY_VALUES_ROOT/nereidhorizon/site-values.yaml"
+NEREIDHORIZON_CHART="$(pull_nereid_chart nereidhorizon "$NEREIDHORIZON_VERSION")"
+test -s "$NEREIDHORIZON_CHART"
+python3 scripts/generate-suite-secrets.py render \
+  --deployment-root "$DEPLOYMENT_ROOT" \
+  --product nereidhorizon \
+  --input "$DEPLOY_VALUES_ROOT/nereidhorizon/site-values.yaml"
+helm upgrade --install nereidhorizon "$NEREIDHORIZON_CHART" \
   --namespace nereidhorizon --create-namespace --timeout 8m \
-  --values "$DEPLOY_VALUES_ROOT/nereidhorizon/values.yaml"
+  --values "$DEPLOY_VALUES_ROOT/nereidhorizon/values.generated.yaml"
 kubectl -n nereidhorizon rollout status deploy/nereidhorizon-backend --timeout=240s
 kubectl -n nereidhorizon rollout status deploy/nereidhorizon-frontend --timeout=240s
 curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
   https://nereidhorizon.example.org/api/health
 curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
   https://nereidhorizon.example.org/api/setup-status
+record_nereid_images nereidhorizon
 ```
 
 Open the Horizon console and complete the first-run Setup form manually. Create
@@ -429,9 +551,9 @@ Forge SeaweedFS from its first installation. There is no supported temporary
 object store. Reuse the exact Forge credentials; do not create a different
 credential pair for Link.
 
-The verified Link Lab/POC chart is listed in §1. Create
-`$DEPLOY_VALUES_ROOT/nereidlink/values.yaml` from this structure only after the
-Forge gate:
+The verified Link development chart is listed in §1. Create
+`$DEPLOY_VALUES_ROOT/nereidlink/site-values.yaml` from this structure only after
+the Forge gate:
 
 ```yaml
 imagePullSecrets: []
@@ -490,22 +612,37 @@ kubectl create namespace nereidlink
 kubectl -n nereidlink create secret generic nereid-internal-ca-tls \
   --from-file=ca.crt="$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
   --dry-run=client -o yaml | kubectl apply -f -
-chmod 600 "$DEPLOY_VALUES_ROOT/nereidlink/values.yaml"
+chmod 600 "$DEPLOY_VALUES_ROOT/nereidlink/site-values.yaml"
+install -m 600 /dev/null "$DEPLOY_VALUES_ROOT/nereidforge/seaweedfs-credentials.yaml"
+```
+
+Edit `seaweedfs-credentials.yaml` to contain exactly the credentials handed off
+by the healthy Forge installation, then render Link's private values:
+
+```yaml
+accessKey: "<exact-Forge-SEAWEEDFS_S3_ACCESS_KEY>"
+secretKey: "<exact-Forge-SEAWEEDFS_S3_SECRET_KEY>"
 ```
 
 Install and verify both tiers:
 
 ```bash
-helm upgrade --install nereidlink \
-  oci://ghcr.io/nereidai/charts/nereidlink \
-  --version "$NEREIDLINK_VERSION" \
+NEREIDLINK_CHART="$(pull_nereid_chart nereidlink "$NEREIDLINK_VERSION")"
+test -s "$NEREIDLINK_CHART"
+python3 scripts/generate-suite-secrets.py render \
+  --deployment-root "$DEPLOYMENT_ROOT" \
+  --product nereidlink \
+  --input "$DEPLOY_VALUES_ROOT/nereidlink/site-values.yaml" \
+  --forge-credentials "$DEPLOY_VALUES_ROOT/nereidforge/seaweedfs-credentials.yaml"
+helm upgrade --install nereidlink "$NEREIDLINK_CHART" \
   --namespace nereidlink --create-namespace --timeout 8m \
-  --values "$DEPLOY_VALUES_ROOT/nereidlink/values.yaml"
+  --values "$DEPLOY_VALUES_ROOT/nereidlink/values.generated.yaml"
 kubectl -n nereidlink rollout status deploy/nereidlink --timeout=240s
 kubectl -n nereidlink rollout status deploy/nereidlink-frontend --timeout=240s
 kubectl -n nereidlink get svc nereidlink-mqtt
 curl --fail --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
   https://nereidlink.example.org/healthz
+record_nereid_images nereidlink
 kubectl -n nereidlink exec deployment/nereidlink -c nereidlink -- \
   cat /var/lib/nereidlink/pki/ca.pem \
   > "$DEPLOYMENT_ROOT/nereidlink-device-ca.pem"
@@ -561,7 +698,8 @@ coordinates.
 Complete [`reference/fresh-cluster-checklist.md`](reference/fresh-cluster-checklist.md)
 and archive non-secret evidence under `$DEPLOY_LOG_ROOT`. Minimum product gates:
 
-- every selected chart/image version and source commit is recorded;
+- every selected selector, resolved chart OCI digest/internal version, running
+  image ID/digest, and source commit is recorded;
 - Identity discovery, Sphere login, and product SSO redirects succeed;
 - every product certificate chains to the intended CA;
 - Link uses Forge SeaweedFS and its bucket survives an application restart;

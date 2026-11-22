@@ -26,23 +26,29 @@ step manually and verify each phase before continuing.
 NereidLink requires Forge SeaweedFS and its exact credentials from the first
 installation. Do not install Link before Forge is healthy.
 
-## Verified Lab/POC artifacts
+## Verified development artifacts
 
-The following immutable versions passed anonymous chart pull/render and
-image-manifest verification on 2026-11-22:
+The floating `0.0.0-dev` charts and their corresponding first-party images
+passed anonymous chart pull/render and image-manifest verification on
+2026-11-22. The [dated evidence snapshot](docs/deploy/reference/development-artifacts-2026-11-22.md)
+records the exact resolved chart versions/digests, image index digests, and
+publication runs:
 
-| Product | Chart and image version | Source commit |
+| Product | OCI chart | Development selector |
 |---|---|---|
-| NereidIdentity | `0.0.0-dev-7c2797d` | `7c2797ddec13d6fcef72a535069738d247173e61` |
-| NereidSphere | `0.0.0-dev-90379cb` | `90379cbec953c51b5807cf60f53c17fb736da1ff` |
-| NereidHorizon | `0.0.0-dev-05aaf97` | `05aaf97bb5d3119f00ccc2ea90d3e8bb86dda49d` |
-| NereidLink | `0.0.0-dev-6da29bd` | `6da29bdca204510bd4b8560c503ead28bc231c0b` |
+| NereidIdentity | `oci://ghcr.io/nereidai/charts/nereididentity` | `0.0.0-dev` |
+| NereidSphere | `oci://ghcr.io/nereidai/charts/nereidsphere` | `0.0.0-dev` |
+| NereidHorizon | `oci://ghcr.io/nereidai/charts/nereidhorizon` | `0.0.0-dev` |
+| NereidLink | `oci://ghcr.io/nereidai/charts/nereidlink` | `0.0.0-dev` |
 
-Charts use `oci://ghcr.io/nereidai/charts/<chart-name>` with an explicit
-`--version`. Each chart selects matching suite images through its `appVersion`.
-The floating `0.0.0-dev` channel is not a reproducible installation input.
-Formal deployments must select a published, anonymously verified bare-SemVer
-version instead.
+The floating chart tag aliases the latest successfully published immutable
+`0.0.0-dev-<short-sha>` OCI manifest; it is not a separate chart package. The
+archive retains that immutable chart version and `appVersion`, selecting
+matching immutable product images. Normal development installations therefore
+need only `0.0.0-dev`. Record the resolved chart digest/version and running
+image digests as deployment evidence. Use the resolved short-SHA snapshot only
+for deliberate reproduction. Formal deployments must select a published,
+anonymously verified bare-SemVer version instead.
 
 > **Current full-suite boundary:** Forge does not yet have a complete public
 > installation channel. Its rolling channel contains backend/frontend images
@@ -61,14 +67,18 @@ Keep site inputs outside every Git checkout:
 
 ```text
 $HOME/.nereidai-deployment/
-├── deploy-values/   # values, credentials, keys, and generated hand-offs
-├── deploy-logs/     # deployment and acceptance records
-└── chart-archives/  # pulled packages used to initialize example values
+├── deploy-values/   # site values, rendered values, and generated hand-offs
+├── secret-store/    # persistent generated operator-supplied secrets
+├── deploy-logs/     # resolved digests, deployment, and acceptance records
+└── chart-archives/  # single resolved packages used for values and installation
 ```
 
-Use restrictive directory and file permissions. Generate a unique secret for
-every required credential and never commit real domains, addresses, values, or
-hand-off files.
+Use restrictive directory and file permissions. Initialize the private secret
+store with `scripts/generate-suite-secrets.py`, render each product's private
+values from a non-secret `site-values.yaml`, and never commit real domains,
+addresses, values, stores, or hand-off files. The tool preserves existing
+secrets across repeated renders and requires the exact Forge credential
+hand-off for Link.
 
 ## What is in this repository
 
@@ -77,6 +87,7 @@ hand-off files.
 | [`docs/deploy/`](docs/deploy/) | Public cluster and suite installation runbooks |
 | [`docs/deploy-standards.md`](docs/deploy-standards.md) | Public artifact, publication, installation, and acceptance contracts |
 | [`deploy/prereqs/`](deploy/prereqs/) | cert-manager CA resources, NFS CSI, and GPU/NPU device plugins |
+| [`scripts/generate-suite-secrets.py`](scripts/generate-suite-secrets.py) | Idempotent private secret generation and product-values injection |
 
 ## Edge delivery
 

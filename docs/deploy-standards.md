@@ -30,8 +30,9 @@ alone does not prove public availability.
 - Tracked first-party product charts use `version: 0.0.0-dev` and
   `appVersion: "0.0.0-dev"`. Packaging injects the selected version; a release
   version is not committed back into `Chart.yaml`.
-- First-party image tags default to `.Chart.AppVersion`, so an immutable chart
-  selects the matching immutable images.
+- First-party image tags default to `.Chart.AppVersion`. A chart resolved
+  through the floating development selector retains its immutable `appVersion`
+  and therefore selects the matching immutable images.
 - Upstream wrapper charts retain their own `version` and `appVersion`. A suite
   release must not overwrite independent upstream metadata.
 - Dependencies are locked. Publication registers declared public HTTPS
@@ -51,15 +52,23 @@ keep thin callers and use the same implementation for both channels.
 
 ### Development channel
 
-A push to the default branch first publishes every required product image, then
-publishes:
+A push to the default branch first publishes every required product image. Each
+image's `0.0.0-dev-<short-sha>` and `0.0.0-dev` tags share one index digest.
+Only after all required images succeed does chart publication:
 
-1. `0.0.0-dev-<short-sha>` — immutable and suitable for a reproducible Lab/POC;
-2. `0.0.0-dev` — the floating channel head.
+1. package and verify one immutable `0.0.0-dev-<short-sha>` chart whose
+   `appVersion` selects the matching immutable images; then
+2. attach the floating `0.0.0-dev` OCI tag to that exact chart manifest.
 
-The chart's `appVersion` equals its chart version. The floating version is not a
-reproducible deployment input and must not be used when an exact installation
-record is required.
+The floating chart tag must never identify a separately packaged `0.0.0-dev`
+archive. Its OCI digest and pulled `.tgz` bytes must equal the immutable
+snapshot's. A failed image or chart publication leaves the previous floating
+chart snapshot in place.
+
+Normal development installations use `0.0.0-dev`; no per-commit edit is needed.
+Record the resolved chart OCI digest, its internal short-SHA version, and the
+running image digests. Select `0.0.0-dev-<short-sha>` directly only for a
+deliberate reproducible snapshot.
 
 ### Formal-release channel
 
@@ -76,9 +85,11 @@ documented hardware-bound Forge images are the single-architecture exceptions.
 
 Every OCI push uses Helm registry authentication, is pulled back
 authenticated, and is compared byte-for-byte with the pushed archive. New GHCR
-packages must be publicly visible before the release is accepted. Every version
+packages must be publicly visible before the release is accepted. Every selector
 referenced by the installation guide then passes a separate anonymous chart
-pull/render and anonymous image-manifest check.
+pull/render and anonymous image-manifest check. For the development channel,
+verification also proves that floating and immutable chart tags resolve to the
+same OCI digest and byte-identical archive.
 
 ## 15.4 Forge release boundary
 
@@ -150,8 +161,16 @@ verification remains an independent ESS and edge acceptance step.
 - Every required password, OIDC client secret, session key, database credential,
   and object-store credential is generated or explicitly supplied for the
   installation.
-- Secret values are never printed in documentation, CI logs, shell tracing, or
-  acceptance output.
+- The suite secret generator uses a persistent mode-`0600` store, never prints
+  secret material, preserves existing values across renders, and shares values
+  only across explicit inter-product contracts. Site values remain separate
+  from generated private values.
+- Externally issued credentials, including Forge SeaweedFS and Open Horizon
+  accounts, must come from their actual systems; the generator must not invent
+  replacements. Link's device CA and Horizon's chart-generated session key
+  remain product-owned.
+- Secret values are never printed in documentation, CI logs, shell tracing,
+  command-line `--set` arguments, or acceptance output.
 - Commands in the runbook are executed by the operator. Documentation changes
   and CI validation do not authorize mutation of a cluster or edge host.
 
@@ -160,12 +179,14 @@ verification remains an independent ESS and edge acceptance step.
 - Documentation and code comments are English-only.
 - Keep the order, prerequisites, values names, chart versions, and verification
   commands consistent across the README, installation guide, and checklist.
-- Pin exact versions in examples. Replace examples only with versions that have
-  passed the public verification in §15.3.
+- Use the verified floating `0.0.0-dev` selector in normal development examples.
+  Immutable short-SHA pins are optional snapshot inputs and formal examples use
+  bare SemVer; every referenced selector must pass §15.3 verification.
 - Do not claim an OCI package, Release installer, manifest, or edge package is
   available until it exists and its public retrieval has been verified.
-- Record the selected chart version, image version, and source commit in the
-  Lab/POC or release hand-off.
+- Record the selected selector, resolved chart OCI digest/internal version,
+  running image IDs/digests, and source commit in the development or release
+  hand-off.
 - Finish with the fresh-cluster checklist, including SSO, product health,
   SeaweedFS-backed Link storage, MQTT, Open Horizon agreements, and separate ESS
   model delivery.

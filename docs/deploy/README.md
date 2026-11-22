@@ -6,10 +6,12 @@ chart and public images; NereidOverview supplies only shared prerequisites and
 suite documentation.
 
 > **Availability gate:** Identity, Sphere, Horizon, and Link have verified
-> immutable Lab/POC artifacts. Forge does not yet have a complete public
-> installation channel. On an empty cluster, stop after Horizon and wait for a
-> verified complete Forge release. Never install Link without healthy Forge
-> SeaweedFS.
+> floating `0.0.0-dev` development artifacts; see the
+> [dated evidence snapshot](reference/development-artifacts-2026-11-22.md) for
+> their resolved versions and digests. Forge does not yet have a complete
+> public installation channel. On an empty cluster, stop after Horizon and wait
+> for a verified complete Forge release. Never install Link without healthy
+> Forge SeaweedFS.
 
 ```mermaid
 flowchart LR
@@ -49,7 +51,8 @@ flowchart LR
 | Products | [Suite installation](install-suite.md) | Ordered product installation with explicit values, health checks, and stop conditions |
 | Acceptance | [Fresh-cluster checklist](reference/fresh-cluster-checklist.md) | Recorded health, SSO, storage, MQTT, edge, and separate ESS evidence |
 | Reference | [Accounts, DNS, and connections](reference/accounts-dns-connections.md) | Matching public endpoints, secrets, and inter-product settings |
-| Engineering | [Public deployment standards](../deploy-standards.md) | Version pinning, artifact verification, source ownership, and release boundaries |
+| Evidence | [2026-11-22 development artifacts](reference/development-artifacts-2026-11-22.md) | Historical resolved chart/image digests and anonymous verification scope |
+| Engineering | [Public deployment standards](../deploy-standards.md) | Floating development selection, snapshot pinning, artifact verification, source ownership, and release boundaries |
 
 ## Non-negotiable ordering rules
 
