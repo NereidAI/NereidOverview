@@ -18,17 +18,19 @@ client configuration. No real credential appears in this document.
 
 ### Public artifacts and secret storage
 
-- Use only exact chart and image versions whose anonymous public retrieval has
-  been verified. Record the artifact reference, version, digest where available,
-  and source revision. A coordinate pattern or publication job is not evidence
-  that an artifact exists or is publicly retrievable.
-- Keep site values and generated credentials in untracked
-  `<deployment-root>/deploy-values/<product>/` files. Use mode 0700 directories
-  and 0600 files. Keep an encrypted off-cluster vault copy and restrict Kubernetes
-  Secret read access to authorized operators and workloads.
-- Generate unique strong database passwords, OIDC client secrets, ticket secrets,
-  session/JWT keys, service tokens, and S3 credentials. Use one Link gateway
-  credential pair per edge host.
+- Use only chart selectors and image versions whose anonymous public retrieval
+  has been verified. Record the artifact reference, resolved chart OCI digest
+  and internal version, running image digests, and source revision. A coordinate
+  pattern or publication job is not evidence of public availability.
+- Keep site values and generated values in untracked
+  `<deployment-root>/deploy-values/<product>/` files and the persistent store in
+  `<deployment-root>/secret-store/`. Use mode 0700 directories and 0600 files.
+  Keep an encrypted off-cluster vault copy and restrict Kubernetes Secret read
+  access to authorized operators and workloads.
+- Use the suite secret generator for unique database passwords, OIDC client
+  secrets, ticket secrets, and session/JWT keys. Supply actual external S3 and
+  Open Horizon credentials rather than generating replacements. Use one Link
+  gateway credential pair per edge host.
 - Never put secret values in Git, documentation, command traces, deployment logs,
   health output, or tickets. Rotate any value that enters one of those locations.
 - The suite CA trust key is `ca.crt`. Create `nereid-internal-ca-tls` in each
@@ -79,10 +81,10 @@ storage, or required hardware resources fail their checks.
 Required values include strong PostgreSQL and master-admin credentials, the
 `identity.suiteAdmin` identity fields, `identity.adminClient.secret`, and
 `identity.clients.{nereidsphere,nereidhorizon,nereidforge,nereidlink}.secret`.
-Either supply a strong `identity.suiteAdmin.password` or deliberately leave only
-that password empty for one-time chart generation; retrieve the generated value
-from `nereididentity-realm`, key `suite-admin-password`, and store it securely.
-Set `identity.seedUsers=false`. The service-account client ID is
+The suite generator supplies a strong `identity.suiteAdmin.password`; preserve
+the same stored value across later renders. The chart retains it in Secret
+`nereididentity-realm`, key `suite-admin-password`. Set
+`identity.seedUsers=false`. The service-account client ID is
 `nereidsphere-admin`; its Secret must match Sphere's admin-client value.
 
 Register only callbacks required by the selected authentication mode:

@@ -16,23 +16,28 @@ site's real DNS name.
 
 ## 1. Shared prerequisites
 
-- [ ] Record the exact chart versions, image versions, source revisions, and
-      public artifact references selected for the installation. Confirm anonymous
-      public retrieval for every exact artifact before using it; a naming pattern
-      does not prove availability.
+- [ ] Record the selected public artifact references and source revisions. For
+      each floating `0.0.0-dev` chart, also record its resolved OCI digest and
+      internal `0.0.0-dev-<short-sha>` version; after installation, record the
+      running image IDs/digests. Confirm anonymous public retrieval for every
+      selected artifact before using it; a naming pattern does not prove
+      availability.
 - [ ] Confirm the operator host and every K3s node have working DNS and HTTPS
       access to all referenced public artifact locations.
 - [ ] Confirm K3s nodes are Ready, `kubectl` targets the intended cluster, Helm
       is available, time is synchronized, and the ingress and storage networks
       are reachable.
-- [ ] Keep values and generated credentials under an untracked
-      `<deployment-root>/deploy-values/<product>/` directory. Use mode 0700 for
-      directories and 0600 for files, disable shell tracing for secret-bearing
-      commands, and keep an encrypted off-cluster vault copy. Never place real
-      values in documentation, Git, logs, or acceptance output.
-- [ ] Generate a unique strong value for every database password, OIDC client
-      secret, session or JWT key, service token, and object-store credential.
-      Generate a separate Link gateway credential pair for every edge host.
+- [ ] Keep site values and generated values under the untracked
+      `<deployment-root>/deploy-values/<product>/` directories and the persistent
+      store under `<deployment-root>/secret-store/`. Use mode 0700 for private
+      directories and 0600 for files, disable shell tracing, and keep encrypted
+      off-cluster vault copies. Never place real values in documentation, Git,
+      logs, or acceptance output.
+- [ ] Run `scripts/generate-suite-secrets.py init` once and render each product's
+      `values.generated.yaml` from its non-secret `site-values.yaml`. Confirm a
+      repeated init/render preserves existing secrets. Supply external systems'
+      actual credentials separately; never generate a replacement Forge S3
+      credential. Generate a separate Link gateway credential pair per edge host.
 - [ ] Create DNS records for `sso.example.org`, `nereidsphere.example.org`,
       `nereidhorizon.example.org`, `nereidforge.example.org`, and `nereidlink.example.org`,
       plus the Forge service names and inference wildcard required by the
@@ -48,20 +53,18 @@ site's real DNS name.
 - [ ] Confirm Traefik serves HTTPS and that required cluster certificates are
       Ready before installing a product.
 
-**Stop if** an exact public artifact cannot be retrieved, storage is not writable,
+**Stop if** a selected public artifact cannot be retrieved, storage is not writable,
 required hardware resources are absent, or the CA/StorageClass is not Ready.
 
 ## 2. NereidIdentity
 
 - [ ] Install release `nereididentity` in namespace `nereididentity` using the
-      exact public artifact and values procedure in the command source. Ensure
+      selected public artifact and values procedure in the command source. Ensure
       the CNPG CRDs are present before installation.
-- [ ] Supply strong PostgreSQL, Keycloak master-admin, and
-      `nereidsphere-admin` credentials, plus distinct client secrets for Sphere,
-      Horizon, Forge, and Link. Set the suite-admin identity fields and either
-      supply its strong password or deliberately leave only that password empty
-      for one-time chart generation; retrieve and vault a generated password
-      from `nereididentity-realm`, key `suite-admin-password`. Set
+- [ ] Confirm the generator supplied strong PostgreSQL, Keycloak master-admin,
+      suite-admin, and `nereidsphere-admin` credentials, plus distinct client
+      secrets for Sphere, Horizon, Forge, and Link. Set the suite-admin identity
+      fields, preserve the secret store for subsequent renders, and set
       `identity.seedUsers=false`.
 - [ ] Use realm `nereidai` and external issuer
       `https://sso.example.org/auth/realms/nereidai`. Register only the callbacks for

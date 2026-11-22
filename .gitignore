@@ -1,2 +1,5 @@
 # Never commit operator-supplied site state placed inside this checkout.
 /.nereidai-deployment/
+
+__pycache__/
+*.py[cod]
