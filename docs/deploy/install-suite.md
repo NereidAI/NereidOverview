@@ -9,10 +9,11 @@ source checkout is needed. NereidOverview supplies the shared prerequisite
 manifests and this runbook; product repositories remain the chart sources of
 truth.
 
-> **Current stop point:** Forge has no complete public installation channel.
-> On an empty cluster, complete §§4–6 (shared prerequisites, Identity, Sphere,
-> and Horizon) and stop at §7. Do not install Link until a complete Forge release has passed the gate
-> and supplied healthy SeaweedFS credentials.
+> **Current stop point:** the independent pre-NereidForge plus NereidForge Helm
+> installation contract is implemented, but no complete pair of formal releases
+> has passed the §7 publication and live-acceptance gates. On an empty cluster,
+> complete §§4–6 and stop at §7. Do not install Link until NereidForge and its
+> SeaweedFS have passed final acceptance.
 
 ## 1. Verified development channel and installation scope
 
@@ -531,31 +532,266 @@ Pattern/agreement delivery and ESS model delivery are separate later steps.
 **Current empty-cluster stop point:** accept Identity, Sphere, and Horizon,
 record their health, and stop here until §7's Forge gate can be satisfied.
 
-## 7. Forge availability gate
+## 7. Phase 3 — pre-NereidForge and NereidForge
 
-Do not run a Forge installation from the rolling channel. A complete public
-Forge installation requires all of the following for one selected formal
-version:
+Forge has two independently versioned parts. `pre-nereidforge` owns the five
+supporting-service charts and the ordered Kubeflow Kustomize installation.
+NereidForge owns only its 23 application images and four OCI charts. Do not use
+the retired monolithic Forge installer, a Kubeflow umbrella chart, or an NF
+source-tree installation.
 
-1. successful publication of all 23 suite-owned image jobs;
-2. all nine active OCI charts, with independent upstream wrapper metadata
-   preserved;
-3. anonymous verification of every chart and image;
-4. the versioned Forge installer, checksum, image manifest, and chart manifest;
-5. anonymous retrieval and extraction verification of that installer; and
-6. a documented source commit and formal tag.
+### 7.1 Formal publication gate
 
-Those artifacts do not currently exist as a verified complete set. This guide
-therefore provides no Forge package URL or installation command. When the gate
-is met, use the selected Forge release's staged infrastructure, Kubeflow,
-application, and verification procedure; require its final verification to pass
-before creating Link values.
+Select both versions only after their exact formal tags and anonymous
+verification evidence are available:
 
-Forge must leave these Link inputs in the operator's private hand-off:
+- `pre-nereidforge/v<PRE_VERSION>`: five OCI charts, the versioned pre source
+  installer, checksum, lock, and chart manifest;
+- `v<NEREIDFORGE_VERSION>`: all 23 NF-owned images, four OCI charts, and the
+  image/chart manifests; and
+- anonymous pull/render or image-manifest verification for every selected
+  artifact, tied to a documented source commit.
+
+The versions are independent; do not infer one from the other. There is no NF
+source-installer asset. The fourth NF chart, `nereidforge-tenant-check`, is for
+verification and is not an application release.
+
+**The complete formal release pair has not yet been published and accepted.
+Do not substitute rolling tags for the placeholders below. The commands become
+eligible only after this gate and remain manual operator steps.**
+
+```bash
+export PRE_VERSION=<verified-pre-version>
+export NEREIDFORGE_VERSION=<verified-nf-version>
+```
+
+### 7.2 Install and accept pre-NereidForge
+
+Download and verify the pre installer anonymously, then extract it outside Git:
+
+```bash
+export PRE_HANDOFF_DIR="$DEPLOY_VALUES_ROOT/nereidforge"
+export PRE_RELEASE_DIR="$DEPLOYMENT_ROOT/pre-nereidforge/$PRE_VERSION"
+export PRE_DOWNLOAD="https://github.com/NereidAI/NereidForge/releases/download/pre-nereidforge/v$PRE_VERSION"
+install -d -m 700 "$PRE_HANDOFF_DIR" "$PRE_RELEASE_DIR"
+curl --fail --location \
+  "$PRE_DOWNLOAD/pre-nereidforge-installer-$PRE_VERSION.tar.gz" \
+  --output "$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_VERSION.tar.gz"
+curl --fail --location \
+  "$PRE_DOWNLOAD/pre-nereidforge-installer-$PRE_VERSION.tar.gz.sha256" \
+  --output "$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_VERSION.tar.gz.sha256"
+curl --fail --location \
+  "$PRE_DOWNLOAD/pre-nereidforge-installer-$PRE_VERSION.lock.json" \
+  --output "$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_VERSION.lock.json"
+curl --fail --location \
+  "$PRE_DOWNLOAD/pre-nereidforge-charts-$PRE_VERSION.txt" \
+  --output "$PRE_RELEASE_DIR/pre-nereidforge-charts-$PRE_VERSION.txt"
+(
+  cd "$PRE_RELEASE_DIR"
+  sha256sum -c "pre-nereidforge-installer-$PRE_VERSION.tar.gz.sha256"
+  tar -xzf "pre-nereidforge-installer-$PRE_VERSION.tar.gz"
+)
+export PRE_ROOT="$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_VERSION"
+export PRE_ENV_FILE="$PRE_HANDOFF_DIR/site.env"
+test -s "$PRE_ROOT/install-lock.json"
+if [[ ! -e "$PRE_ENV_FILE" ]]; then
+  install -m 600 /dev/null "$PRE_ENV_FILE"
+fi
+```
+
+Edit `site.env` before installing. It is a private pre input file, not a Helm
+values handoff. Set at least the existing pre inputs for PostgreSQL, SeaweedFS,
+and Dex, plus these non-secret NF handoff inputs:
+
+```bash
+BASE_DOMAIN=example.org
+STORAGE_CLASS=nfs-csi
+POD_CIDR=10.42.0.0/16
+SERVICE_CIDR=10.43.0.0/16
+DEX_STATIC_EMAIL=admin@example.org
+FRONTEND_HOST=nereidforge.example.org
+SSO_MODE=ns
+SSO_NS_BASE_URL=https://nereidsphere.example.org
+```
+
+Also retain the required `PG_ADMIN_PASSWORD`, SeaweedFS first-initialization
+credentials, `DEX_STATIC_PASSWORD_HASH`, and the Dex plaintext needed by
+`mr-check.sh` in that mode-0600 file. Quote shell values correctly, especially
+bcrypt hashes. Preserve this file and the existing Kubernetes secret stores on
+upgrades; do not regenerate credentials merely because an installer is rerun.
+
+Run every stage manually and stop on the first failure:
+
+```bash
+bash "$PRE_ROOT/scripts/10_infra.sh"
+bash "$PRE_ROOT/scripts/30_install-kubeflow.sh"
+bash "$PRE_ROOT/scripts/60_verify/infra-check.sh"
+bash "$PRE_ROOT/scripts/60_verify/kubeflow-check.sh"
+bash "$PRE_ROOT/scripts/60_verify/mr-check.sh"
+```
+
+The successful Kubeflow stage automatically finalizes the NF handoff. It:
+
+- retains only the Label Studio/CVAT token keys in
+  `nereidforge/nereidforge-service-credentials` without replacing NF-owned keys;
+- copies only the public `ca.crt` to `nereidforge/nereid-internal-ca`; and
+- writes deterministic, non-secret
+  `$PRE_HANDOFF_DIR/values.generated.yaml` using schema
+  `pre-nereidforge-handoff/v1`.
+
+Do not put credentials in that generated file. It contains endpoints, Secret
+names and keys, ingress paths, `namespace.create=false`, and post-install
+settings shared by the three NF application charts.
+
+### 7.3 Retain NF-owned Secrets and create a non-secret overlay
+
+The Sphere installation in §6.1 must contain the `forge` product, its
+`https://nereidforge.example.org` URL, and its independent `ssoSecret`. Keep the
+Identity `nereidforge` client for the optional direct-OIDC configuration; the
+default generated handoff uses Sphere `ns` mode.
+
+Create a private directory for first-time NF secrets. Preserve all three files
+on upgrades. The JWT and admin password may be generated once as shown; copy
+the SSO secret from the existing Sphere `forge` product secret store instead of
+inventing a different value:
+
+```bash
+export NF_SECRET_DIR="$DEPLOYMENT_ROOT/secrets/nereidforge"
+install -d -m 700 "$NF_SECRET_DIR"
+test -s "$NF_SECRET_DIR/jwt" || openssl rand -hex 32 | tr -d '\n' > "$NF_SECRET_DIR/jwt"
+test -s "$NF_SECRET_DIR/admin-password" || \
+  openssl rand -hex 24 | tr -d '\n' > "$NF_SECRET_DIR/admin-password"
+# Copy the exact Sphere config.products[id=forge].ssoSecret into this file.
+# Create the placeholder only on the first run; never truncate a retained value.
+if [[ ! -e "$NF_SECRET_DIR/sso-client" ]]; then
+  install -m 600 /dev/null "$NF_SECRET_DIR/sso-client"
+fi
+chmod 600 "$NF_SECRET_DIR/jwt" "$NF_SECRET_DIR/admin-password"
+test -s "$NF_SECRET_DIR/sso-client"
+```
+
+Merge the NF-owned keys through a private patch file. This adds no credential
+to Helm values, command arguments, or logs, and leaves the two pre-owned token
+keys intact:
+
+```bash
+python3 - "$NF_SECRET_DIR" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+patch = {
+    "stringData": {
+        "NEREIDFORGE_AUTH_JWT_SECRET": (root / "jwt").read_text().strip(),
+        "NEREIDFORGE_SSO_NS_CLIENT_SECRET": (root / "sso-client").read_text().strip(),
+    }
+}
+destination = root / "runtime-secret-patch.json"
+destination.write_text(json.dumps(patch) + "\n")
+destination.chmod(0o600)
+PY
+kubectl -n nereidforge patch secret nereidforge-service-credentials \
+  --type=merge --patch-file="$NF_SECRET_DIR/runtime-secret-patch.json"
+```
+
+Create the administrator Secret only if it is absent. The backend Helm hook
+uses its `password` key to seed `admin` when no such user exists; it does not
+rotate an existing password by default:
+
+```bash
+if ! kubectl -n nereidforge get secret nereidforge-admin-credentials >/dev/null 2>&1; then
+  kubectl -n nereidforge create secret generic nereidforge-admin-credentials \
+    --from-file=password="$NF_SECRET_DIR/admin-password" \
+    --dry-run=client -o yaml | kubectl apply -f -
+fi
+if [[ ! -e "$PRE_HANDOFF_DIR/operator-values.yaml" ]]; then
+  printf '{}\n' > "$PRE_HANDOFF_DIR/operator-values.yaml"
+fi
+chmod 600 "$PRE_HANDOFF_DIR/operator-values.yaml"
+```
+
+Add only non-secret site overrides to `operator-values.yaml`; `{}` selects the
+generated defaults. Never use its `secrets`, `stringData`, `password`,
+`jwt_secret`, `client_secret`, `lsToken`, or token/access-key fields. Never pass
+credentials with Helm `--set`. The read-only preflight rejects these literal
+credential fields and requires all existing Secrets and keys, including the
+CNPG, SeaweedFS, KFP artifact, CA, runtime, and administrator contracts.
+
+### 7.4 Run preflight and install the three NF application charts
+
+```bash
+export NF_VALUES_FILE="$PRE_HANDOFF_DIR/values.generated.yaml"
+export NF_OPERATOR_VALUES_FILE="$PRE_HANDOFF_DIR/operator-values.yaml"
+bash "$PRE_ROOT/scripts/40_check-nf-handoff.sh"
+
+helm upgrade --install nereidforge-backend \
+  oci://ghcr.io/nereidai/charts/nereidforge-backend \
+  --version "$NEREIDFORGE_VERSION" --namespace nereidforge \
+  -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
+  --wait --timeout 10m
+helm upgrade --install nereidforge-frontend \
+  oci://ghcr.io/nereidai/charts/nereidforge-frontend \
+  --version "$NEREIDFORGE_VERSION" --namespace nereidforge \
+  -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
+  --wait --timeout 10m
+helm upgrade --install ml-backend \
+  oci://ghcr.io/nereidai/charts/nereidforge-ml-backend \
+  --version "$NEREIDFORGE_VERSION" --namespace nereidforge \
+  -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
+  --wait --timeout 10m
+```
+
+Do not add `--create-namespace`; pre owns that namespace and the handoff
+prevents Helm from adopting it. The backend post-install/post-upgrade hooks
+seed the administrator without implicit password rotation and synchronize the
+existing KFP pipeline definitions. A failed hook fails the Helm operation. Do
+not continue to frontend or ML backend after a backend failure.
+
+### 7.5 Final NF acceptance and Link handoff
+
+Confirm rollouts and archive the running image evidence:
+
+```bash
+kubectl -n nereidforge rollout status deploy/nereidforge-api --timeout=5m
+kubectl -n nereidforge rollout status deploy/nereidforge-worker --timeout=5m
+kubectl -n nereidforge rollout status deploy/nereidforge-frontend --timeout=5m
+kubectl -n nereidforge rollout status deploy/ml-backend --timeout=5m
+kubectl -n nereidforge get jobs,pods
+record_nereid_images nereidforge
+```
+
+Run the NF fail-closed verifier from a verification-only checkout of the exact
+selected NF tag. This checkout supplies test tooling only; it is not an
+installation package and installs nothing:
+
+```bash
+install -d -m 700 "$DEPLOYMENT_ROOT/verifiers"
+if [[ ! -d "$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_VERSION/.git" ]]; then
+  git clone --depth 1 --branch "v$NEREIDFORGE_VERSION" \
+    https://github.com/NereidAI/NereidForge.git \
+    "$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_VERSION"
+fi
+NF_ENV_FILE="$PRE_ENV_FILE" NF_HANDOFF_DIR="$PRE_HANDOFF_DIR" \
+  bash "$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_VERSION/scripts/60_verify/nf-check.sh"
+```
+
+The verifier reads the administrator password from the existing Secret when no
+legacy local credential file is present and never prints the login response.
+Complete browser acceptance as well: NS login and logout, real administrator
+login, a KFP training run, Label Studio/CVAT integration, and a notebook route
+including WebSockets. Require all four SeaweedFS buckets and their authenticated
+list access to remain healthy. Any failed health, login, SSO, pipeline,
+integration, frontend, notebook, or object-store check blocks Link.
+
+Forge must leave these Link inputs in the operator's private handoff; the
+non-secret `values.generated.yaml` deliberately does not contain the credential
+values:
 
 - reachable SeaweedFS S3 endpoint;
 - a public S3 endpoint if browsers or edge hosts need presigned downloads;
-- bucket access key and secret key; and
+- bucket access key and secret key from the retained
+  `nereidforge/seaweedfs-s3-credentials` Secret; and
 - the CA/TLS settings for both endpoints.
 
 ## 8. NereidLink (after Forge)
@@ -627,7 +863,9 @@ kubectl -n nereidlink create secret generic nereid-internal-ca-tls \
   --from-file=ca.crt="$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
   --dry-run=client -o yaml | kubectl apply -f -
 chmod 600 "$DEPLOY_VALUES_ROOT/nereidlink/site-values.yaml"
-install -m 600 /dev/null "$DEPLOY_VALUES_ROOT/nereidforge/seaweedfs-credentials.yaml"
+if [[ ! -e "$DEPLOY_VALUES_ROOT/nereidforge/seaweedfs-credentials.yaml" ]]; then
+  install -m 600 /dev/null "$DEPLOY_VALUES_ROOT/nereidforge/seaweedfs-credentials.yaml"
+fi
 ```
 
 Edit `seaweedfs-credentials.yaml` to contain exactly the credentials handed off
