@@ -34,6 +34,11 @@ class InstallRunbookSecretSequenceTest(unittest.TestCase):
         self.assertEqual(len(rendering), 1)
         self.assertIn("site-values.yaml", rendering[0])
 
+    def test_nfs_storage_reuses_bootstrap_server_and_export(self):
+        self.assertIn('--set-string "nfs.nfs.server=${NFS_SERVER}"', self.text)
+        self.assertIn('--set-string "nfs.nfs.share=${NFS_EXPORT}"', self.text)
+        self.assertNotIn("--set nfs.nfs.share=/export/nereidai", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()
