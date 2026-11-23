@@ -187,20 +187,16 @@ introduced by a newer tool version. Keep an encrypted off-cluster backup of this
 store. Do not delete it during an upgrade or attempt to use it as a rotation
 tool.
 
-Keep non-secret site configuration in each product's `site-values.yaml`. After
-editing that file, render a separate private values file:
+Keep non-secret site configuration in each product's `site-values.yaml`.
+**Do not run `render` in this section.** Each product phase below first creates
+or instructs you to create that file, gives you an explicit opportunity to edit
+it, and only then provides the product-specific `render` command.
 
-```bash
-python3 scripts/generate-suite-secrets.py render \
-  --deployment-root "$DEPLOYMENT_ROOT" \
-  --product nereididentity \
-  --input "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
-```
-
-The default output is `values.generated.yaml` beside the input. Use that
+The default render output is `values.generated.yaml` beside the input. Use that
 generated file for Helm, never the site file. After changing site configuration,
-repeat the same command with `--force`; this replaces only the generated values
-and does not rotate secrets. Do not edit the generated file manually.
+repeat the product phase's render command with `--force`; this replaces only the
+generated values and does not rotate secrets. Do not edit the generated file
+manually.
 
 The generator shares a credential only where two products must use the exact
 same contract, such as Identity's Sphere client secret and Sphere's OIDC client
@@ -319,12 +315,10 @@ test -s "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml" || \
     nereididentity/values-k3s-example.yaml \
     > "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
 chmod 600 "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
-# Set real hosts and identity fields in site-values.yaml, then inject secrets.
-python3 scripts/generate-suite-secrets.py render \
-  --deployment-root "$DEPLOYMENT_ROOT" \
-  --product nereididentity \
-  --input "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
 ```
+
+Stop here and edit `site-values.yaml` before rendering or installing. Do not
+copy the next command until you have saved the site-specific changes.
 
 The generator supplies these required values with unique strong secrets:
 
@@ -342,6 +336,16 @@ redirect/web origin to the planned `example.org` replacements. Set the
 `identity.suiteAdmin` identity fields deliberately. The explicit generated
 password is used only when the suite-admin user is first created; preserve the
 secret store so later renders do not replace it with a different value.
+
+After saving the edited site values, inject the persistent secrets:
+
+```bash
+test -s "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
+python3 scripts/generate-suite-secrets.py render \
+  --deployment-root "$DEPLOYMENT_ROOT" \
+  --product nereididentity \
+  --input "$DEPLOY_VALUES_ROOT/nereididentity/site-values.yaml"
+```
 
 Install and verify:
 
