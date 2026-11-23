@@ -253,17 +253,27 @@ done
 
 ### 4.2 NFS CSI StorageClass
 
-Prepare the NFS export and node NFS client support first. Replace both values
-with the site's actual NFS server and export:
+Prepare the NFS export and node NFS client support first. Reuse the exact
+`NFS_SERVER` and `NFS_EXPORT` values recorded in
+[`cluster-bootstrap.md` §3.4](cluster-bootstrap.md#34-nfs-service-and-clients).
+If this is a new shell, export those actual site values again before running
+this block:
 
 ```bash
+: "${NFS_SERVER:?Set NFS_SERVER to the actual NFS host}"
+: "${NFS_EXPORT:?Set NFS_EXPORT to the actual exported path}"
 helm upgrade --install nfs-csi deploy/prereqs/charts/nfs-csi \
   --namespace kube-system \
-  --set nfs.nfs.server=nfs.example.org \
-  --set nfs.nfs.share=/export/nereidai
-kubectl get storageclass nfs-csi
+  --set-string "nfs.nfs.server=${NFS_SERVER}" \
+  --set-string "nfs.nfs.share=${NFS_EXPORT}"
+kubectl get storageclass nfs-csi \
+  -o jsonpath='{.parameters.server}{"\n"}{.parameters.share}{"\n"}'
 kubectl -n kube-system rollout status deploy/csi-nfs-controller --timeout=180s
 ```
+
+Confirm that the printed server and share exactly match the real NFS export
+before creating any PVC. For the bootstrap example, the share is
+`/srv/nfs/nereidai`, not `/export/nereidai`.
 
 Create and delete a small test PVC before product installation; record dynamic
 provisioning, mounting, and deletion evidence. Keep node-local `local-path`
