@@ -124,8 +124,11 @@ Kustomize stages and vendored manifests.
 
 ## 15.5 Central installation contract
 
-The supported platform form is Kubernetes with Helm. Every phase is run
-manually by the operator and verified before the next phase starts.
+The supported platform form is Kubernetes with Helm. Every phase is verified
+before the next phase starts. Operators may use the complete manual runbook,
+the optional resumable convenience installer, or independent procedures and
+tooling. Automation does not weaken any artifact, ordering, Secret-retention,
+or acceptance gate, and NereidOverview is not a required deployment controller.
 
 The strict product order is:
 
@@ -141,8 +144,14 @@ The strict product order is:
   object-store substitute is not supported.
 
 The installation guide must give explicit values inputs, ordered commands,
-health checks, and stop conditions for each product. A successful Helm command
-alone is not acceptance.
+health checks, and stop conditions for each product. The optional convenience
+runner must preserve those inputs and gates, record OCI digest intents before
+download and freeze resolved artifacts for a partial installation, refuse
+concurrent or cross-cluster resume, pin child processes to a private kubecontext,
+and recheck live health before skipping a completed stage. Resource query errors
+must not be treated as absence, and unowned storage resources must not be adopted
+or deleted. A successful Helm command or a local completion marker alone is not
+acceptance.
 
 ## 15.6 Edge delivery contract
 
@@ -175,6 +184,12 @@ verification remains an independent ESS and edge acceptance step.
   secret material, preserves existing values across renders, and shares values
   only across explicit inter-product contracts. Site values remain separate
   from generated private values.
+- The quick installer's single environment file contains no credentials. Its
+  state journal contains only stage status, cluster identity, and non-secret
+  input/artifact fingerprints. Existing canonical Kubernetes Secrets remain
+  authoritative; resume never generates replacements for an existing identity.
+  Private minified kubeconfigs and malformed-YAML diagnostics receive the same
+  restrictive-permission and source-content-suppression treatment as credentials.
 - Externally issued credentials, including Forge SeaweedFS and Open Horizon
   accounts, must come from their actual systems; the generator must not invent
   replacements. Link's device CA and Horizon's chart-generated session key

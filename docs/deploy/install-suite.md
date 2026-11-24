@@ -1,11 +1,16 @@
 # NereidAI Public Suite Installation Guide (k3s + Rancher)
 
 Start with a ready, empty, Rancher-managed k3s cluster from
-[`cluster-bootstrap.md`](cluster-bootstrap.md). Every phase is executed manually
-by the operator and accepted before the next phase starts.
+[`cluster-bootstrap.md`](cluster-bootstrap.md). This document is the complete
+manual path: every phase is executed by the operator and accepted before the
+next phase starts. The optional [resumable quick installer](quick-install.md)
+provides the same ordering and gates through one non-secret environment file.
+Operators may also use independent procedures and tooling; NereidOverview is a
+convenience, not a required deployment controller.
 
 Products install directly from versioned public GHCR OCI charts. No product
-source checkout is needed for installation. NereidOverview supplies the shared
+source checkout is needed for chart installation; §7.5 separately uses an
+exact-commit verification-only NF checkout. NereidOverview supplies the shared
 prerequisite manifests and this runbook; product repositories remain the chart
 sources of truth.
 
@@ -214,10 +219,14 @@ python3 scripts/generate-suite-secrets.py init \
 
 The tool creates `$DEPLOYMENT_ROOT/secret-store/suite-secrets.json` with mode
 `0600` inside a mode-`0700` directory. It prints paths and counts, never secret
-values. Running `init` again preserves every existing value and only adds fields
-introduced by a newer tool version. Keep an encrypted off-cluster backup of this
-store. Do not delete it during an upgrade or attempt to use it as a rotation
-tool. Current pre-NereidForge is a separate exception: it neither reads nor
+values. Running `init` again preserves every existing value. If an existing store
+lacks any expected key, `init` fails closed and leaves its bytes unchanged; it
+never generates a replacement for a deployed identity. Restore the canonical
+store from its encrypted backup. A newer tool version that introduces a field
+requires a separate reviewed migration, not automatic gap filling. Keep an
+encrypted off-cluster backup of this store. Do not delete it during an upgrade or
+attempt to use it as a rotation tool. Current pre-NereidForge is a separate
+exception: it neither reads nor
 populates this suite store for its PostgreSQL, SeaweedFS, or Dex initialization;
 §7.2 uses its private `site.env` and live canonical Kubernetes Secrets instead.
 
@@ -335,15 +344,24 @@ Identity's locked dependency uses the CloudNativePG operator chart `0.29.0`.
 Install its cluster-wide CRDs once, without installing a second operator:
 
 ```bash
-if ! kubectl get crd clusters.postgresql.cnpg.io >/dev/null 2>&1; then
+cnpg_output=""
+if cnpg_output="$(kubectl get crd clusters.postgresql.cnpg.io -o name 2>&1)"; then
+  :
+elif [[ "${cnpg_output%%$'\n'*}" == "Error from server (NotFound):"* ]]; then
   helm pull cloudnative-pg --repo https://cloudnative-pg.io/charts \
     --version 0.29.0 --destination "$DEPLOYMENT_ROOT/chart-archives"
   tar -xOzf "$DEPLOYMENT_ROOT/chart-archives/cloudnative-pg-0.29.0.tgz" \
     cloudnative-pg/templates/crds/crds.yaml | sed '1d;$d' \
     | kubectl apply --server-side --force-conflicts -f -
+else
+  printf 'Could not query the CloudNativePG CRD; refusing to mutate it\n' >&2
+  exit 1
 fi
 kubectl get crd clusters.postgresql.cnpg.io
 ```
+
+Only an explicit NotFound response permits CRD installation. RBAC, network, and
+API failures stop this phase without pulling or applying the chart.
 
 ## 5. Phase 1 — NereidIdentity
 
@@ -836,7 +854,7 @@ one:
     if output="$(kubectl get "$kind" "$name" -n nereidforge -o name 2>&1)"; then
       return 0
     fi
-    if [[ "$output" == *"NotFound"* || "$output" == *"not found"* ]]; then
+    if [[ "${output%%$'\n'*}" == "Error from server (NotFound):"* ]]; then
       return 1
     fi
     printf 'Could not query %s/%s in nereidforge\n' "$kind" "$name" >&2
@@ -1001,15 +1019,23 @@ kubectl -n nereidforge patch secret nereidforge-service-credentials \
   --type=merge --patch-file="$NF_SECRET_DIR/runtime-secret-patch.json"
 ```
 
-Create the administrator Secret only if it is absent. The backend Helm hook
+Create the administrator Secret only after an explicit server `NotFound`
+response; every other query failure stops before mutation. The backend Helm hook
 uses its `password` key to seed `admin` when no such user exists; it does not
 rotate an existing password by default:
 
 ```bash
-if ! kubectl -n nereidforge get secret nereidforge-admin-credentials >/dev/null 2>&1; then
+nereidforge_admin_output=""
+if nereidforge_admin_output="$(kubectl -n nereidforge \
+  get secret nereidforge-admin-credentials -o name 2>&1)"; then
+  :
+elif [[ "${nereidforge_admin_output%%$'\n'*}" == "Error from server (NotFound):"* ]]; then
   kubectl -n nereidforge create secret generic nereidforge-admin-credentials \
     --from-file=password="$NF_SECRET_DIR/admin-password" \
     --dry-run=client -o yaml | kubectl apply -f -
+else
+  printf 'Could not query secret/nereidforge-admin-credentials; refusing to mutate it\n' >&2
+  exit 1
 fi
 if [[ ! -e "$PRE_HANDOFF_DIR/operator-values.yaml" ]]; then
   printf '{}\n' > "$PRE_HANDOFF_DIR/operator-values.yaml"
@@ -1098,16 +1124,42 @@ NEREIDFORGE_SHORT_SHA="${NEREIDFORGE_RESOLVED_VERSION#0.0.0-dev-}"
 [[ "$NEREIDFORGE_SHORT_SHA" =~ ^[0-9a-f]{7}$ ]]
 NF_VERIFIER_DIR="$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_RESOLVED_VERSION"
 install -d -m 700 "$DEPLOYMENT_ROOT/verifiers"
+prepare_nf_verifier_checkout() {
+  local checkout="$1"
+  if ! git -C "$checkout" cat-file -e "${NEREIDFORGE_SHORT_SHA}^{commit}"; then
+    git -C "$checkout" fetch --filter=blob:none origin || return 1
+  fi
+  git -C "$checkout" cat-file -e "${NEREIDFORGE_SHORT_SHA}^{commit}" || return 1
+  git -C "$checkout" checkout --detach "$NEREIDFORGE_SHORT_SHA" || return 1
+  [[ "$(git -C "$checkout" rev-parse HEAD)" == "$NEREIDFORGE_SHORT_SHA"* ]] || return 1
+}
 if [[ ! -d "$NF_VERIFIER_DIR/.git" ]]; then
-  git clone --filter=blob:none --no-checkout \
-    https://github.com/NereidAI/NereidForge.git "$NF_VERIFIER_DIR"
+  [[ ! -e "$NF_VERIFIER_DIR" ]] || {
+    printf 'Verifier path exists but is not a Git checkout\n' >&2
+    exit 1
+  }
+  NF_VERIFIER_TMP="$(mktemp -d "$DEPLOYMENT_ROOT/verifiers/.nereidforge-$NEREIDFORGE_RESOLVED_VERSION.XXXXXX")"
+  if ! git clone --filter=blob:none --no-checkout \
+    https://github.com/NereidAI/NereidForge.git "$NF_VERIFIER_TMP"; then
+    rm -rf "$NF_VERIFIER_TMP"
+    exit 1
+  fi
+  if ! prepare_nf_verifier_checkout "$NF_VERIFIER_TMP"; then
+    rm -rf "$NF_VERIFIER_TMP"
+    exit 1
+  fi
+  mv "$NF_VERIFIER_TMP" "$NF_VERIFIER_DIR"
+else
+  prepare_nf_verifier_checkout "$NF_VERIFIER_DIR"
 fi
-git -C "$NF_VERIFIER_DIR" cat-file -e "${NEREIDFORGE_SHORT_SHA}^{commit}"
-git -C "$NF_VERIFIER_DIR" checkout --detach "$NEREIDFORGE_SHORT_SHA"
-[[ "$(git -C "$NF_VERIFIER_DIR" rev-parse HEAD)" == "$NEREIDFORGE_SHORT_SHA"* ]]
 NF_ENV_FILE="$PRE_ENV_FILE" NF_HANDOFF_DIR="$PRE_HANDOFF_DIR" \
   bash "$NF_VERIFIER_DIR/scripts/60_verify/nf-check.sh"
 ```
+
+A fresh clone is checked out and verified in a temporary sibling before its
+atomic move. If an interrupted clone already left `.git` without the commit,
+`fetch` repairs the same checkout; resume never treats `.git` alone as proof of a
+usable verifier.
 
 The verifier reads the administrator password from the existing Secret when no
 legacy local credential file is present and never prints the login response.
@@ -1241,9 +1293,11 @@ not the suite Ingress CA. Never export `ca-key.pem` or `server-key.pem`. Preserv
 the Link data PVC and back it up under the site's encryption policy so the CA
 and issued credentials survive restarts.
 
-The migration init container must complete and the application must create the
-`nereidlink` bucket through Forge SeaweedFS. Check logs and storage before
-accepting the rollout. Complete the one-time administrator bootstrap through
+The migration init container must complete in the non-terminating Pods owned by
+the ReplicaSet that matches the current `nereidlink` Deployment template. An old
+ReplicaSet's success or failure is not current-revision evidence. The application
+must create the `nereidlink` bucket through Forge SeaweedFS. Check logs and
+storage before accepting the rollout. Complete the one-time administrator bootstrap through
 the web UI. Import any site license through the product's supported runtime
 interface; no signing private key is part of chart installation.
 
