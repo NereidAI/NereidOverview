@@ -1,23 +1,32 @@
 # NereidOverview
 
-**Start here for public NereidAI installation.** This repository contains the
-suite runbooks, delivery standards, and cluster-shared prerequisites. Product
-runtime code and product-owned Helm chart sources remain in their respective
-repositories.
+**Use this repository as an optional quick reference for public NereidAI
+installation.** It contains suite runbooks, delivery standards, cluster-shared
+prerequisites, and a resumable convenience installer. Product runtime code and
+product-owned Helm chart sources remain in their respective repositories.
 
-The supported installation form is an internet-connected Kubernetes/k3s
-cluster using versioned GHCR OCI charts and public images. Operators run every
-step manually and verify each phase before continuing.
+NereidOverview is not a required deployment controller. Operators can install
+all components directly from their owning artifacts and documentation, using
+their own procedures or automation, without following this repository's manual.
+The supported platform form is an internet-connected Kubernetes/k3s cluster
+using versioned GHCR OCI charts and public images. Every installation path must
+preserve the same ordering, artifact, Secret-retention, and acceptance gates.
 
 ## Installation path
 
 1. Prepare or accept a Rancher-managed empty k3s cluster with the
    [cluster bootstrap guide](docs/deploy/cluster-bootstrap.md).
 2. Install the [cluster-shared prerequisites](deploy/prereqs/README.md).
-3. Follow the [suite installation guide](docs/deploy/install-suite.md) in this
-   strict order:
+3. Install in this strict order:
 
    **NereidIdentity → NereidSphere → NereidHorizon → NereidForge → NereidLink**
+
+   Either follow the complete [manual suite guide](docs/deploy/install-suite.md),
+   or configure one non-secret `deployment.env` and use the optional
+   [resumable quick installer](docs/deploy/quick-install.md). The latter runs
+   and resumes with one command, verifies completed stages before skipping them,
+   and still pauses at independent publication and live-acceptance gates.
+   Equivalent independently managed installation procedures are also valid.
 
 4. Deliver field services through Open Horizon, configure NereidEdge to connect
    to Link, and deliver models through ESS as a separate operation.
@@ -61,9 +70,12 @@ anonymously verified bare-SemVer version instead.
 
 ## Operator workspace
 
-Only NereidOverview is needed for the shared prerequisites and suite runbook.
-Product charts are pulled directly from GHCR; product source checkouts are not
-part of the installation procedure.
+For this repository's optional guided path, only the NereidOverview checkout is
+needed for the shared prerequisites and convenience tooling. Product charts are
+pulled directly from GHCR; product source checkouts are not part of the central
+installation procedure except for the exact-commit NF verifier. Independent
+installations may use the owning products' artifacts and their own tooling
+instead of this runbook, provided they satisfy the published contracts.
 
 Keep site inputs outside every Git checkout:
 
@@ -76,15 +88,17 @@ $HOME/.nereidai-deployment/
 └── chart-archives/  # single resolved packages used for values and installation
 ```
 
-Create `deployment.env` from the installation guide once, then run
-`source scripts/load-deployment-env.sh` in each operator shell to restore its
-selectors, paths, resolved identities, and download helpers. Use restrictive
-directory and file permissions. Initialize the private secret store with
-`scripts/generate-suite-secrets.py`, render each product's private
-values from a non-secret `site-values.yaml`, and never commit real domains,
-addresses, values, stores, or hand-off files. The tool preserves existing
-secrets across repeated renders and requires the exact Forge credential
-hand-off for Link.
+For the manual path, create `deployment.env` from the installation guide once,
+then run `source scripts/load-deployment-env.sh` in each operator shell to
+restore its selectors, paths, resolved identities, and download helpers. For
+the quick path, edit the same single non-secret file and let the runner generate
+product values and maintain its resume journal. Use restrictive directory and
+file permissions. The manual path initializes the private secret store with
+`scripts/generate-suite-secrets.py` and renders each product's private values
+from a non-secret `site-values.yaml`; the quick runner performs those steps
+automatically. Never commit real domains, addresses, values, stores, or hand-off
+files. The tool preserves existing secrets across repeated renders and requires
+the exact Forge credential hand-off for Link.
 
 ## What is in this repository
 
@@ -94,6 +108,8 @@ hand-off for Link.
 | [`docs/deploy-standards.md`](docs/deploy-standards.md) | Public artifact, publication, installation, and acceptance contracts |
 | [`deploy/prereqs/`](deploy/prereqs/) | cert-manager CA resources, NFS CSI, and GPU/NPU device plugins |
 | [`scripts/generate-suite-secrets.py`](scripts/generate-suite-secrets.py) | Idempotent private secret generation and product-values injection |
+| [`scripts/install-suite.sh`](scripts/install-suite.sh) | Optional one-configuration, resumable central-suite installer |
+| [`docs/deploy/quick-install.md`](docs/deploy/quick-install.md) | Quick-install configuration, stage, recovery, and external-acceptance guide |
 
 ## Edge delivery
 

@@ -15,11 +15,14 @@ import unittest
 
 ROOT = Path(__file__).parents[2]
 LOADER = ROOT / "scripts" / "load-deployment-env.sh"
+RUNNER = ROOT / "scripts" / "lib" / "suite-runner.sh"
+ARTIFACTS = ROOT / "scripts" / "lib" / "suite-artifacts.sh"
 VERSION = "0.0.0-dev-abcdef1"
 SOURCE_REVISION = "abcdef1" + "a" * 33
 SECOND_VERSION = "0.0.0-dev-bbcdef2"
 SECOND_SOURCE_REVISION = "bbcdef2" + "b" * 33
 DIGEST = "sha256:" + "1" * 64
+SECOND_DIGEST = "sha256:" + "2" * 64
 
 
 def make_oras(directory):
@@ -29,30 +32,63 @@ def make_oras(directory):
 set -euo pipefail
 command="$1"
 shift
-if [[ "$command" == manifest ]]; then
+if [[ "$command" == manifest || "$command" == blob ]]; then
   test "$1" = fetch
   shift
 fi
 output=""
 registry_config=""
+reference=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --output) output="$2"; shift 2 ;;
     --registry-config) registry_config="$2"; shift 2 ;;
-    *) shift ;;
+    *) reference="$1"; shift ;;
   esac
 done
 case "$registry_config" in
   "$DEPLOYMENT_ROOT"/anonymous-registry.*/oras.json) ;;
   *) echo "missing isolated ORAS config: $registry_config" >&2; exit 3 ;;
 esac
+if [[ -n "${FAKE_CALLS:-}" ]]; then
+  printf '%s %s\\n' "$command" "$reference" >> "$FAKE_CALLS"
+fi
 case "$command" in
-  resolve) printf '%s\\n' "$FAKE_DIGEST" ;;
-  manifest) cat "$FAKE_REGISTRY/manifest.json" ;;
+  resolve) printf '%s\\n' "${FAKE_RESOLVE_DIGEST:-$FAKE_DIGEST}" ;;
+  manifest)
+    [[ "$reference" == *@"$FAKE_DIGEST" ]] || {
+      echo "manifest was not retrieved by retained digest: $reference" >&2; exit 4;
+    }
+    if [[ "$reference" == *pre-nereidforge-installer@* ]]; then
+      cat "$FAKE_REGISTRY/manifest.json"
+    else
+      cat "$FAKE_REGISTRY/chart-manifest.json"
+    fi
+    ;;
   pull)
     test -n "$output"
+    [[ "$reference" == *@"$FAKE_DIGEST" ]] || {
+      echo "pre archive was not retrieved by retained digest: $reference" >&2; exit 4;
+    }
+    if [[ "${FAKE_FAIL_PULL:-0}" == 1 ]]; then
+      echo "simulated interrupted pre pull" >&2; exit 42
+    fi
     find "$FAKE_REGISTRY" -maxdepth 1 -type f \
       -name 'pre-nereidforge-*' -exec cp -t "$output" {} +
+    ;;
+  blob)
+    test -n "$output"
+    [[ "$reference" == *@"$FAKE_LAYER_DIGEST" ]] || {
+      echo "chart blob was not retrieved by layer digest: $reference" >&2; exit 4;
+    }
+    if [[ "${FAKE_FAIL_BLOB:-0}" == 1 ]]; then
+      echo "simulated interrupted chart blob fetch" >&2; exit 42
+    fi
+    if [[ "${FAKE_CORRUPT_BLOB:-0}" == 1 ]]; then
+      printf 'corrupt chart blob\\n' > "$output"
+    else
+      cp "$FAKE_REGISTRY/chart-archive.tgz" "$output"
+    fi
     ;;
   *) echo "unexpected fake oras command: $command" >&2; exit 2 ;;
 esac
@@ -89,6 +125,26 @@ test "$PRE_ROOT" = "$PRE_RELEASE_DIR/pre-nereidforge-installer-{VERSION}"
 type pull_nereid_chart >/dev/null
 type pull_pre_nereidforge_installer >/dev/null
 type record_nereid_images >/dev/null
+"""
+            result = run_bash(script, os.environ.copy())
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_explicit_environment_file_can_live_outside_the_default_root_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            deployment = root / "deployment"
+            deployment.mkdir()
+            custom = root / "custom.env"
+            custom.write_text(
+                f"export DEPLOYMENT_ROOT={shlex.quote(str(deployment))}\n"
+                "export NEREIDFORGE_VERSION=0.0.0-dev\n"
+            )
+            script = f"""
+set -euo pipefail
+DEPLOYMENT_ENV_FILE={shlex.quote(str(custom))}
+source {shlex.quote(str(LOADER))}
+test "$NEREIDFORGE_VERSION" = 0.0.0-dev
+type pull_nereid_chart >/dev/null
 """
             result = run_bash(script, os.environ.copy())
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -136,7 +192,19 @@ class PreInstallerHelperTest(unittest.TestCase):
             + "\n"
         )
 
-    def pull(self, deployment, fake_bin, registry, digest):
+    def pre_environment(self, deployment, fake_bin, registry, digest, overrides=None):
+        environment = os.environ.copy()
+        environment.update(
+            PATH=f"{fake_bin}:{environment['PATH']}",
+            FAKE_REGISTRY=str(registry),
+            FAKE_DIGEST=digest,
+            FAKE_CALLS=str(deployment / "oras-calls"),
+        )
+        if overrides:
+            environment.update(overrides)
+        return environment
+
+    def pull(self, deployment, fake_bin, registry, digest, overrides=None):
         script = f"""
 set -euo pipefail
 DEPLOYMENT_ROOT={shlex.quote(str(deployment))}
@@ -145,15 +213,10 @@ PRE_ROOT="$(pull_pre_nereidforge_installer "$PRE_VERSION")"
 test -s "$PRE_ROOT/install-lock.json"
 printf '%s\\n' "$PRE_ROOT"
 """
-        environment = os.environ.copy()
-        environment.update(
-            PATH=f"{fake_bin}:{environment['PATH']}",
-            FAKE_REGISTRY=str(registry),
-            FAKE_DIGEST=digest,
-        )
+        environment = self.pre_environment(deployment, fake_bin, registry, digest, overrides)
         return run_bash(script, environment)
 
-    def test_helper_returns_only_root_and_supports_a_moved_floating_selector(self):
+    def test_helper_returns_only_root_and_reuses_completion_after_selector_moves(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             first_registry = root / "registry-one"
@@ -169,27 +232,205 @@ printf '%s\\n' "$PRE_ROOT"
 
             first = self.pull(deployment, fake_bin, first_registry, DIGEST)
             self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-            first_root = deployment / "pre-nereidforge" / "0.0.0-dev" / f"pre-nereidforge-installer-{VERSION}"
+            release = deployment / "pre-nereidforge" / "0.0.0-dev"
+            first_root = release / f"pre-nereidforge-installer-{VERSION}"
             self.assertEqual(first.stdout.strip(), str(first_root))
-            self.assertEqual(
-                (deployment / "pre-nereidforge" / "0.0.0-dev" / "source-commit.txt").read_text().strip(),
-                SOURCE_REVISION,
-            )
+            self.assertEqual((release / "source-commit.txt").read_text().strip(), SOURCE_REVISION)
+            calls_after_first = (deployment / "oras-calls").read_bytes()
 
-            second = self.pull(deployment, fake_bin, second_registry, "sha256:" + "2" * 64)
+            second = self.pull(deployment, fake_bin, second_registry, SECOND_DIGEST)
             self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-            second_root = deployment / "pre-nereidforge" / "0.0.0-dev" / f"pre-nereidforge-installer-{SECOND_VERSION}"
-            self.assertEqual(second.stdout.strip(), str(second_root))
-            self.assertTrue(first_root.is_dir())
-            self.assertTrue(second_root.is_dir())
-            artifacts = deployment / "pre-nereidforge" / "0.0.0-dev" / "artifacts"
-            self.assertEqual({path.name for path in artifacts.iterdir()}, {VERSION, SECOND_VERSION})
-            for version in (VERSION, SECOND_VERSION):
-                self.assertEqual(len(list((artifacts / version).iterdir())), 4)
-            self.assertEqual(
-                (deployment / "pre-nereidforge" / "0.0.0-dev" / "resolved-version.txt").read_text().strip(),
-                SECOND_VERSION,
+            self.assertEqual(second.stdout.strip(), str(first_root))
+            self.assertFalse((release / f"pre-nereidforge-installer-{SECOND_VERSION}").exists())
+            artifacts = release / "artifacts"
+            self.assertEqual({path.name for path in artifacts.iterdir()}, {VERSION})
+            self.assertEqual(len(list((artifacts / VERSION).iterdir())), 4)
+            self.assertEqual((release / "resolved-version.txt").read_text().strip(), VERSION)
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls_after_first)
+
+    def test_interrupted_pre_pull_resumes_intent_without_a_second_resolve(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = root / "registry"
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            self.make_environment(deployment)
+            self.make_registry(registry)
+            make_oras(fake_bin)
+
+            interrupted = self.pull(
+                deployment, fake_bin, registry, DIGEST, {"FAKE_FAIL_PULL": "1"}
             )
+            self.assertNotEqual(interrupted.returncode, 0)
+            release = deployment / "pre-nereidforge" / "0.0.0-dev"
+            self.assertIn(DIGEST, (release / "installer-digest-intent.txt").read_text())
+            self.assertFalse((release / "installer-complete.env").exists())
+
+            resumed = self.pull(
+                deployment,
+                fake_bin,
+                registry,
+                DIGEST,
+                {"FAKE_RESOLVE_DIGEST": SECOND_DIGEST},
+            )
+            self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+            calls = (deployment / "oras-calls").read_text().splitlines()
+            self.assertEqual(sum(line.startswith("resolve ") for line in calls), 1)
+            self.assertTrue(all(DIGEST in line for line in calls if line.startswith(("manifest ", "pull "))))
+            self.assertTrue((release / f"pre-nereidforge-installer-{VERSION}").is_dir())
+            self.assertFalse((release / f"pre-nereidforge-installer-{SECOND_VERSION}").exists())
+
+    def test_completed_pre_artifact_before_suite_lock_does_not_resolve_again(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = root / "registry"
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            locks = deployment / "quick-install" / "artifact-locks"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            locks.mkdir(parents=True)
+            self.make_environment(deployment)
+            self.make_registry(registry)
+            make_oras(fake_bin)
+            first = self.pull(deployment, fake_bin, registry, DIGEST)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            calls_after_artifact = (deployment / "oras-calls").read_bytes()
+
+            script = f"""
+set -euo pipefail
+DEPLOYMENT_ROOT={shlex.quote(str(deployment))}
+source {shlex.quote(str(LOADER))}
+source {shlex.quote(str(RUNNER))}
+source {shlex.quote(str(ARTIFACTS))}
+QUICK_ARTIFACT_LOCK_DIR={shlex.quote(str(locks))}
+suite_prepare_pre_frozen "$PRE_VERSION"
+printf '%s\\n' "$PRE_ROOT"
+"""
+            environment = self.pre_environment(
+                deployment,
+                fake_bin,
+                registry,
+                SECOND_DIGEST,
+                {"FAKE_RESOLVE_DIGEST": SECOND_DIGEST},
+            )
+            locked = run_bash(script, environment)
+            self.assertEqual(locked.returncode, 0, locked.stdout + locked.stderr)
+            self.assertEqual(locked.stdout.strip(), first.stdout.strip())
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls_after_artifact)
+            self.assertTrue((locks / "pre-0.0.0-dev.lock").is_file())
+
+    def test_pre_artifact_without_completion_reuses_archive_and_extracted_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = root / "registry"
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            self.make_environment(deployment)
+            self.make_registry(registry)
+            make_oras(fake_bin)
+            first = self.pull(deployment, fake_bin, registry, DIGEST)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            release = deployment / "pre-nereidforge" / "0.0.0-dev"
+            (release / "installer-complete.env").unlink()
+
+            recovered = self.pull(
+                deployment,
+                fake_bin,
+                registry,
+                DIGEST,
+                {"FAKE_RESOLVE_DIGEST": SECOND_DIGEST},
+            )
+            self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+            self.assertEqual(recovered.stdout, first.stdout)
+            calls = (deployment / "oras-calls").read_text().splitlines()
+            self.assertEqual(sum(line.startswith("resolve ") for line in calls), 1)
+            self.assertEqual(sum(line.startswith("manifest ") for line in calls), 2)
+            self.assertEqual(sum(line.startswith("pull ") for line in calls), 1)
+
+    def test_completed_pre_checksum_mismatch_fails_closed_without_registry_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = root / "registry"
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            self.make_environment(deployment)
+            self.make_registry(registry)
+            make_oras(fake_bin)
+            first = self.pull(deployment, fake_bin, registry, DIGEST)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            archive = (
+                deployment
+                / "pre-nereidforge"
+                / "0.0.0-dev"
+                / "artifacts"
+                / VERSION
+                / f"pre-nereidforge-installer-{VERSION}.tar.gz"
+            )
+            archive.write_bytes(b"corrupt")
+            calls = (deployment / "oras-calls").read_bytes()
+
+            result = self.pull(deployment, fake_bin, registry, SECOND_DIGEST)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("archive digest mismatch", result.stderr)
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls)
+            self.assertEqual(archive.read_bytes(), b"corrupt")
+
+    def test_corrupt_pre_intent_fails_closed_without_registry_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = root / "registry"
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            self.make_environment(deployment)
+            self.make_registry(registry)
+            make_oras(fake_bin)
+            interrupted = self.pull(
+                deployment, fake_bin, registry, DIGEST, {"FAKE_FAIL_PULL": "1"}
+            )
+            self.assertNotEqual(interrupted.returncode, 0)
+            intent = deployment / "pre-nereidforge" / "0.0.0-dev" / "installer-digest-intent.txt"
+            intent.write_text("selector=0.0.0-dev\ndigest=not-a-digest\n")
+            calls = (deployment / "oras-calls").read_bytes()
+
+            result = self.pull(deployment, fake_bin, registry, SECOND_DIGEST)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid OCI digest intent", result.stderr)
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls)
+
+    def test_missing_pre_intent_with_completion_never_resolves_a_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = root / "registry"
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            self.make_environment(deployment)
+            self.make_registry(registry)
+            make_oras(fake_bin)
+            first = self.pull(deployment, fake_bin, registry, DIGEST)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            release = deployment / "pre-nereidforge" / "0.0.0-dev"
+            (release / "installer-digest-intent.txt").unlink()
+            complete = release / "installer-complete.env"
+            retained = complete.read_bytes()
+            calls = (deployment / "oras-calls").read_bytes()
+
+            result = self.pull(deployment, fake_bin, registry, SECOND_DIGEST)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Missing OCI digest intent", result.stderr)
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls)
+            self.assertEqual(complete.read_bytes(), retained)
 
     def test_source_revision_must_match_the_immutable_version(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -213,70 +454,310 @@ class ChartHelperTest(unittest.TestCase):
         helm.write_text(
             """#!/usr/bin/env bash
 set -euo pipefail
-case "$HELM_REGISTRY_CONFIG" in
-  "$DEPLOYMENT_ROOT"/anonymous-registry.*/helm.json) ;;
-  *) echo "missing isolated Helm config" >&2; exit 3 ;;
-esac
-if [[ "$1" == pull ]]; then
-  repository="$2"
-  shift 2
-  selector=""
-  destination=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --version) selector="$2"; shift 2 ;;
-      --destination) destination="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  product="${repository##*/}"
-  printf 'archive\\n' > "$destination/${product}-${selector}.tgz"
-elif [[ "$1" == show && "$2" == chart ]]; then
-  printf 'name: nereidforge-backend\\nversion: %s\\nappVersion: "%s"\\n' \
-    "$FAKE_CHART_VERSION" "$FAKE_CHART_VERSION"
+if [[ "$1" == show && "$2" == chart ]]; then
+  version="$(awk '/^version:/ {print $2; exit}' "$3")"
+  printf 'name: nereidforge-backend\\nversion: %s\\nappVersion: "%s"\\n' "$version" "$version"
 else
-  echo "unexpected fake helm command: $*" >&2
+  echo "unexpected fake helm command (floating pulls are forbidden): $*" >&2
   exit 2
 fi
 """
         )
         helm.chmod(0o755)
 
+    def make_chart_registry(self, registry, version=VERSION):
+        registry.mkdir(parents=True)
+        archive = registry / "chart-archive.tgz"
+        archive.write_text(f"version: {version}\n")
+        layer_digest = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+        (registry / "chart-manifest.json").write_text(
+            json.dumps(
+                {
+                    "layers": [
+                        {
+                            "mediaType": "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+                            "digest": layer_digest,
+                        }
+                    ]
+                }
+            )
+        )
+        return layer_digest
+
+    def make_environment(self, deployment):
+        (deployment / "deployment.env").write_text(
+            f"export DEPLOYMENT_ROOT={shlex.quote(str(deployment))}\n"
+            'export DEPLOY_LOG_ROOT="$DEPLOYMENT_ROOT/deploy-logs"\n'
+        )
+
+    def chart_environment(
+        self, deployment, fake_bin, registry, digest, layer_digest, overrides=None
+    ):
+        environment = os.environ.copy()
+        environment.update(
+            PATH=f"{fake_bin}:{environment['PATH']}",
+            FAKE_REGISTRY=str(registry),
+            FAKE_DIGEST=digest,
+            FAKE_LAYER_DIGEST=layer_digest,
+            FAKE_CALLS=str(deployment / "oras-calls"),
+        )
+        if overrides:
+            environment.update(overrides)
+        return environment
+
+    def pull_chart(
+        self, deployment, fake_bin, registry, digest, layer_digest, selector="0.0.0-dev", overrides=None
+    ):
+        script = f"""
+set -euo pipefail
+DEPLOYMENT_ROOT={shlex.quote(str(deployment))}
+source {shlex.quote(str(LOADER))}
+pull_nereid_chart nereidforge-backend {shlex.quote(selector)}
+"""
+        environment = self.chart_environment(
+            deployment, fake_bin, registry, digest, layer_digest, overrides
+        )
+        return run_bash(script, environment)
+
     def test_immutable_selector_must_match_the_archive_version(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fake_bin = root / "bin"
             deployment = root / "deployment"
+            registry = root / "registry"
             fake_bin.mkdir()
             deployment.mkdir()
             make_oras(fake_bin)
             self.make_helm(fake_bin)
-            (deployment / "deployment.env").write_text(
-                "\n".join(
-                    [
-                        f"export DEPLOYMENT_ROOT={shlex.quote(str(deployment))}",
-                        'export DEPLOY_LOG_ROOT="$DEPLOYMENT_ROOT/deploy-logs"',
-                        f"export NEREIDFORGE_VERSION={SECOND_VERSION}",
-                    ]
-                )
-                + "\n"
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+            result = self.pull_chart(
+                deployment, fake_bin, registry, DIGEST, layer_digest, selector=SECOND_VERSION
             )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("resolved to unexpected version", result.stderr)
+
+    def test_interrupted_chart_blob_fetch_resumes_intent_without_a_second_resolve(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+
+            interrupted = self.pull_chart(
+                deployment, fake_bin, registry, DIGEST, layer_digest, overrides={"FAKE_FAIL_BLOB": "1"}
+            )
+            self.assertNotEqual(interrupted.returncode, 0)
+            evidence = deployment / "deploy-logs" / "nereidforge-backend"
+            self.assertIn(DIGEST, (evidence / "chart-digest-intent-0.0.0-dev.txt").read_text())
+            self.assertFalse((evidence / "chart-complete-0.0.0-dev.env").exists())
+
+            resumed = self.pull_chart(
+                deployment,
+                fake_bin,
+                registry,
+                DIGEST,
+                layer_digest,
+                overrides={"FAKE_RESOLVE_DIGEST": SECOND_DIGEST},
+            )
+            self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+            calls = (deployment / "oras-calls").read_text().splitlines()
+            self.assertEqual(sum(line.startswith("resolve ") for line in calls), 1)
+            self.assertTrue(all(DIGEST in line for line in calls if line.startswith("manifest ")))
+            self.assertTrue(all(layer_digest in line for line in calls if line.startswith("blob ")))
+            archive = deployment / "chart-archives" / f"nereidforge-backend-{VERSION}.tgz"
+            self.assertEqual(resumed.stdout.strip(), str(archive))
+            self.assertFalse((deployment / "chart-archives" / f"nereidforge-backend-{SECOND_VERSION}.tgz").exists())
+
+    def test_completed_chart_before_suite_lock_does_not_resolve_again(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            locks = deployment / "quick-install" / "artifact-locks"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            locks.mkdir(parents=True)
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+            first = self.pull_chart(deployment, fake_bin, registry, DIGEST, layer_digest)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            calls_after_artifact = (deployment / "oras-calls").read_bytes()
+
             script = f"""
 set -euo pipefail
 DEPLOYMENT_ROOT={shlex.quote(str(deployment))}
 source {shlex.quote(str(LOADER))}
-pull_nereid_chart nereidforge-backend "$NEREIDFORGE_VERSION"
+source {shlex.quote(str(RUNNER))}
+source {shlex.quote(str(ARTIFACTS))}
+QUICK_ARTIFACT_LOCK_DIR={shlex.quote(str(locks))}
+suite_pull_chart_frozen nereidforge-backend 0.0.0-dev
 """
-            environment = os.environ.copy()
-            environment.update(
-                PATH=f"{fake_bin}:{environment['PATH']}",
-                FAKE_REGISTRY=str(root),
-                FAKE_DIGEST=DIGEST,
-                FAKE_CHART_VERSION=VERSION,
+            environment = self.chart_environment(
+                deployment,
+                fake_bin,
+                registry,
+                SECOND_DIGEST,
+                layer_digest,
+                {"FAKE_RESOLVE_DIGEST": SECOND_DIGEST},
             )
-            result = run_bash(script, environment)
+            locked = run_bash(script, environment)
+            self.assertEqual(locked.returncode, 0, locked.stdout + locked.stderr)
+            self.assertEqual(locked.stdout.strip(), first.stdout.strip())
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls_after_artifact)
+            self.assertTrue((locks / "chart-nereidforge-backend-0.0.0-dev.lock").is_file())
+
+    def test_chart_archive_without_completion_is_reused_by_layer_digest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+            first = self.pull_chart(deployment, fake_bin, registry, DIGEST, layer_digest)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            evidence = deployment / "deploy-logs" / "nereidforge-backend"
+            (evidence / "chart-complete-0.0.0-dev.env").unlink()
+
+            recovered = self.pull_chart(
+                deployment,
+                fake_bin,
+                registry,
+                DIGEST,
+                layer_digest,
+                overrides={"FAKE_RESOLVE_DIGEST": SECOND_DIGEST},
+            )
+            self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+            self.assertEqual(recovered.stdout, first.stdout)
+            calls = (deployment / "oras-calls").read_text().splitlines()
+            self.assertEqual(sum(line.startswith("resolve ") for line in calls), 1)
+            self.assertEqual(sum(line.startswith("manifest ") for line in calls), 2)
+            self.assertEqual(sum(line.startswith("blob ") for line in calls), 1)
+
+    def test_chart_blob_digest_mismatch_fails_then_resumes_same_intent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+            mismatch = self.pull_chart(
+                deployment,
+                fake_bin,
+                registry,
+                DIGEST,
+                layer_digest,
+                overrides={"FAKE_CORRUPT_BLOB": "1"},
+            )
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertIn("chart blob digest mismatch", mismatch.stderr)
+
+            resumed = self.pull_chart(
+                deployment,
+                fake_bin,
+                registry,
+                DIGEST,
+                layer_digest,
+                overrides={"FAKE_RESOLVE_DIGEST": SECOND_DIGEST},
+            )
+            self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+            calls = (deployment / "oras-calls").read_text().splitlines()
+            self.assertEqual(sum(line.startswith("resolve ") for line in calls), 1)
+
+    def test_completed_chart_digest_mismatch_fails_closed_without_registry_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+            first = self.pull_chart(deployment, fake_bin, registry, DIGEST, layer_digest)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            archive = Path(first.stdout.strip())
+            archive.write_bytes(b"corrupt")
+            calls = (deployment / "oras-calls").read_bytes()
+
+            result = self.pull_chart(deployment, fake_bin, registry, SECOND_DIGEST, layer_digest)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("resolved to unexpected version", result.stderr)
+            self.assertIn("archive digest mismatch", result.stderr)
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls)
+            self.assertEqual(archive.read_bytes(), b"corrupt")
+
+    def test_missing_chart_intent_with_completion_never_resolves_a_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+            first = self.pull_chart(deployment, fake_bin, registry, DIGEST, layer_digest)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            evidence = deployment / "deploy-logs" / "nereidforge-backend"
+            (evidence / "chart-digest-intent-0.0.0-dev.txt").unlink()
+            complete = evidence / "chart-complete-0.0.0-dev.env"
+            retained = complete.read_bytes()
+            calls = (deployment / "oras-calls").read_bytes()
+
+            result = self.pull_chart(deployment, fake_bin, registry, SECOND_DIGEST, layer_digest)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Missing OCI digest intent", result.stderr)
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls)
+            self.assertEqual(complete.read_bytes(), retained)
+
+    def test_chart_digest_evidence_mismatch_fails_closed_without_registry_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+            interrupted = self.pull_chart(
+                deployment, fake_bin, registry, DIGEST, layer_digest, overrides={"FAKE_FAIL_BLOB": "1"}
+            )
+            self.assertNotEqual(interrupted.returncode, 0)
+            evidence = deployment / "deploy-logs" / "nereidforge-backend" / "chart-digest.txt"
+            evidence.write_text(SECOND_DIGEST + "\n")
+            calls = (deployment / "oras-calls").read_bytes()
+
+            result = self.pull_chart(deployment, fake_bin, registry, DIGEST, layer_digest)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid OCI digest evidence", result.stderr)
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls)
 
 
 if __name__ == "__main__":

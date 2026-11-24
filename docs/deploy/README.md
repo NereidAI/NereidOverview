@@ -1,9 +1,10 @@
 # Public Deployment Guides
 
-Install the suite manually on an internet-connected Kubernetes/k3s cluster.
-Do not skip or reorder phases. Each product uses a versioned public GHCR OCI
-chart and public images; NereidOverview supplies only shared prerequisites and
-suite documentation.
+Install the suite on an internet-connected Kubernetes/k3s cluster without
+skipping or reordering phases. Each product uses a versioned public GHCR OCI
+chart and public images. NereidOverview is optional: use its shared
+prerequisites and manual runbook, its resumable convenience installer, or an
+independent procedure that preserves the same contracts.
 
 > **Availability gate:** Identity, Sphere, Horizon, and Link have verified
 > floating `0.0.0-dev` development artifacts; see the
@@ -50,7 +51,8 @@ flowchart LR
 |---|---|---|
 | Cluster | [Cluster bootstrap](cluster-bootstrap.md) | Reachable, Rancher-managed empty k3s cluster with public registry access |
 | Phase 0 | [Shared prerequisites](../../deploy/prereqs/README.md) and [suite guide §4](install-suite.md#4-phase-0--shared-prerequisites) | Ready cert-manager/internal-ca, working storage, and required hardware plugins |
-| Products | [Suite installation](install-suite.md) | Ordered product installation with explicit values, health checks, and stop conditions |
+| Products | [Suite installation](install-suite.md) | Complete manual path with explicit values, health checks, and stop conditions |
+| Optional automation | [Resumable quick installation](quick-install.md) | One non-secret environment file, frozen artifacts, phase journal, and failure resume |
 | Acceptance | [Fresh-cluster checklist](reference/fresh-cluster-checklist.md) | Recorded health, SSO, storage, MQTT, edge, and separate ESS evidence |
 | Reference | [Accounts, DNS, and connections](reference/accounts-dns-connections.md) | Matching public endpoints, secrets, and inter-product settings |
 | Evidence | [2026-11-22 development artifacts](reference/development-artifacts-2026-11-22.md) | Historical resolved chart/image digests and anonymous verification scope |

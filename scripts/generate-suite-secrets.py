@@ -101,6 +101,8 @@ def load_store(path: Path) -> dict[str, Any]:
 
 def initialize_store(deployment_root: Path) -> tuple[Path, int]:
     path = store_path(deployment_root)
+    if path.is_symlink():
+        raise SecretToolError(f"secret store must not be a symlink: {path}")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     mode = stat.S_IMODE(path.parent.stat().st_mode)
     if mode & 0o077:
@@ -109,6 +111,12 @@ def initialize_store(deployment_root: Path) -> tuple[Path, int]:
 
     if path.exists():
         document = load_store(path)
+        missing = sorted(set(SECRET_GENERATORS) - set(document["secrets"]))
+        if missing:
+            raise SecretToolError(
+                "secret store is incomplete; missing keys: " + ", ".join(missing)
+                + "; restore the canonical store from its encrypted backup or perform a reviewed migration"
+            )
     else:
         document = {"schemaVersion": SCHEMA_VERSION, "secrets": {}}
     generated = 0
@@ -237,7 +245,10 @@ def render_values(args: argparse.Namespace) -> Path:
     generated = document["secrets"]
     missing = sorted(set(SECRET_GENERATORS) - set(generated))
     if missing:
-        raise SecretToolError("secret store is incomplete; run the init command to add missing values")
+        raise SecretToolError(
+            "secret store is incomplete; restore the canonical store or perform a reviewed migration; "
+            "init will not generate replacements"
+        )
 
     input_path = args.input.expanduser().resolve()
     output_path = (
@@ -274,7 +285,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     def add_root(subparser: argparse.ArgumentParser) -> None:
         subparser.add_argument("--deployment-root", type=Path, required=True)
 
-    init_parser = subparsers.add_parser("init", help="create missing secrets without rotating existing values")
+    init_parser = subparsers.add_parser(
+        "init",
+        help="create a complete new store; reject incomplete existing stores without replacement",
+    )
     add_root(init_parser)
 
     render_parser = subparsers.add_parser("render", help="inject secrets into a product values copy")

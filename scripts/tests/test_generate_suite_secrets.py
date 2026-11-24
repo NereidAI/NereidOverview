@@ -71,6 +71,28 @@ class GenerateSuiteSecretsTest(unittest.TestCase):
         self.assertEqual(len(set(self.generated.values())), len(self.generated))
         self.assertEqual(len(self.generated["sphere.session_key"].encode()), 32)
 
+    def test_dangling_store_symlink_is_rejected_without_replacement(self):
+        self.store.unlink()
+        self.store.symlink_to(self.root / "missing-target")
+
+        with self.assertRaisesRegex(TOOL.SecretToolError, "symlink"):
+            TOOL.initialize_store(self.root)
+
+        self.assertTrue(self.store.is_symlink())
+        self.assertFalse((self.root / "missing-target").exists())
+
+    def test_existing_incomplete_store_is_preserved_and_rejected(self):
+        document = json.loads(self.store.read_text(encoding="utf-8"))
+        document["secrets"].pop("identity.client.nereidsphere")
+        self.store.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.store.chmod(0o600)
+        incomplete = self.store.read_bytes()
+
+        with self.assertRaisesRegex(TOOL.SecretToolError, "secret store is incomplete"):
+            TOOL.initialize_store(self.root)
+
+        self.assertEqual(self.store.read_bytes(), incomplete)
+
     def test_identity_and_sphere_share_exact_credentials(self):
         _, identity = self.render("nereididentity", {})
         sphere_site = {

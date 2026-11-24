@@ -115,9 +115,20 @@ class ForgeDevelopmentRunbookTest(unittest.TestCase):
         self.assertIn("missing+=(PG_ADMIN_PASSWORD)", preflight)
         self.assertIn("secret:seaweedfs-s3-config", preflight)
         self.assertIn("configmap:seaweedfs-s3-config", preflight)
-        self.assertIn('*"NotFound"*', preflight)
+        self.assertIn('Error from server (NotFound):', preflight)
+        self.assertNotIn('*"not found"*', preflight)
         self.assertIn('(( status == 1 )) || exit "$status"', preflight)
         self.assertNotIn("PG_CLUSTER_NAME PG_DB_NAME PG_DB_USER PG_ADMIN_PASSWORD", preflight)
+
+    def test_nf_admin_secret_creation_requires_explicit_not_found(self):
+        nf_secrets = self.section.split("### 7.3", 1)[1].split("### 7.4", 1)[0]
+        admin = next(
+            block for block in bash_blocks(nf_secrets)
+            if "create secret generic nereidforge-admin-credentials" in block
+        )
+        self.assertIn("Error from server (NotFound):", admin)
+        self.assertIn("Could not query secret/nereidforge-admin-credentials", admin)
+        self.assertNotIn("if ! kubectl -n nereidforge get secret nereidforge-admin-credentials", admin)
 
     def test_nf_install_block_stops_before_helm_after_any_failed_prerequisite(self):
         nf_section = self.section.split("### 7.4", 1)[1].split("### 7.5", 1)[0]

@@ -1,8 +1,11 @@
 # Public Internet K3s Fresh-Cluster Checklist
 
-Use the [suite installation guide](../install-suite.md) as the command source and
+Use the [manual suite installation guide](../install-suite.md), the optional
+[resumable quick installer](../quick-install.md), or an equivalent independent
+procedure as the command source, together with the
 [accounts, DNS, and connections reference](accounts-dns-connections.md) for value
-names and endpoints. Every command is executed manually by the operator.
+names and endpoints. The operator remains responsible for every command and
+acceptance result, including those performed by automation.
 
 Follow this order without overlap or substitution:
 
@@ -33,11 +36,13 @@ site's real DNS name.
       directories and 0600 for files, disable shell tracing, and keep encrypted
       off-cluster vault copies. Never place real values in documentation, Git,
       logs, or acceptance output.
-- [ ] Run `scripts/generate-suite-secrets.py init` once and render each product's
-      `values.generated.yaml` from its non-secret `site-values.yaml`. Confirm a
-      repeated init/render preserves existing secrets. Supply external systems'
-      actual credentials separately; never generate a replacement Forge S3
-      credential. Generate a separate Link gateway credential pair per edge host.
+- [ ] For the manual path, run `scripts/generate-suite-secrets.py init` once and
+      render each product's `values.generated.yaml` from its non-secret
+      `site-values.yaml`; the quick runner performs these steps from its one
+      non-secret environment file. Confirm repeated initialization/rendering
+      preserves existing secrets. Supply external systems' actual credentials
+      separately; never generate a replacement Forge S3 credential. Generate a
+      separate Link gateway credential pair per edge host.
 - [ ] Create DNS records for `sso.example.org`, `nereidsphere.example.org`,
       `nereidhorizon.example.org`, `nereidforge.example.org`, and `nereidlink.example.org`,
       plus the Forge service names and inference wildcard required by the
