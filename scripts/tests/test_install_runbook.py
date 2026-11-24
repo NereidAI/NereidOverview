@@ -76,6 +76,77 @@ class ForgeDevelopmentRunbookTest(unittest.TestCase):
         self.assertIn("including after a disconnect", operator_section)
         self.assertNotRegex(self.section, r"(?m)^export ")
 
+    def test_pre_inputs_and_tools_are_validated_before_the_ordered_stages(self):
+        pre_section = self.section.split("### 7.2", 1)[1].split("### 7.3", 1)[0]
+        self.assertIn("DEX_STATIC_EMAIL=admin@nereidforge.local", pre_section)
+        self.assertNotIn("DEX_STATIC_EMAIL=admin@example.org", pre_section)
+        self.assertNotIn('admin@$BASE_DOMAIN', pre_section)
+        for variable in (
+            "PG_ADMIN_PASSWORD",
+            "SEAWEEDFS_S3_ACCESS_KEY",
+            "SEAWEEDFS_S3_SECRET_KEY",
+            "DEX_STATIC_PASSWORD",
+            "DEX_STATIC_PASSWORD_HASH",
+        ):
+            self.assertIn(variable, pre_section)
+        self.assertIn("command -v envsubst", pre_section)
+        self.assertIn("command -v htpasswd", pre_section)
+        self.assertIn("import boto3", pre_section)
+        self.assertIn("helm repo add cloudnative-pg", pre_section)
+        self.assertIn(
+            "Current pre-NereidForge does not read or populate "
+            "`secret-store/suite-secrets.json`",
+            pre_section,
+        )
+
+    def test_pre_secret_recovery_preserves_live_identities_and_checks_dex_pair(self):
+        pre_section = self.section.split("### 7.2", 1)[1].split("### 7.3", 1)[0]
+        self.assertIn('pg-${PG_CLUSTER_NAME}-credentials', pre_section)
+        self.assertIn("SITE_VS_SECRET", pre_section)
+        self.assertIn("DB_VS_SECRET", pre_section)
+        self.assertIn("seaweedfs-s3-credentials", pre_section)
+        self.assertIn("Password for user dex correct", pre_section)
+        self.assertIn("DEX_CREDENTIALS=MISMATCH", pre_section)
+        self.assertIn("genuine first installation", pre_section)
+        preflight = next(
+            block for block in bash_blocks(pre_section) if "PRE_PREFLIGHT=PASS" in block
+        )
+        self.assertTrue(preflight.startswith("(\n  set -euo pipefail\n"), preflight)
+        self.assertIn("missing+=(PG_ADMIN_PASSWORD)", preflight)
+        self.assertIn("secret:seaweedfs-s3-config", preflight)
+        self.assertIn("configmap:seaweedfs-s3-config", preflight)
+        self.assertIn('*"NotFound"*', preflight)
+        self.assertIn('(( status == 1 )) || exit "$status"', preflight)
+        self.assertNotIn("PG_CLUSTER_NAME PG_DB_NAME PG_DB_USER PG_ADMIN_PASSWORD", preflight)
+
+    def test_nf_install_block_stops_before_helm_after_any_failed_prerequisite(self):
+        nf_section = self.section.split("### 7.4", 1)[1].split("### 7.5", 1)[0]
+        install = next(
+            block for block in bash_blocks(nf_section)
+            if "helm upgrade --install nereidforge-backend" in block
+        )
+        self.assertTrue(install.startswith("(\n  set -euo pipefail\n"), install)
+        self.assertTrue(install.rstrip().endswith(")"), install)
+        self.assertIn("return to §7.1", nf_section)
+        self.assertIn("Do not authenticate", nf_section)
+        acceptance = self.section.split("### 7.5", 1)[1].split("## 8.", 1)[0]
+        self.assertIn(
+            'NEREIDFORGE_RESOLVED_VERSION="$(cat "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt")"',
+            acceptance,
+        )
+
+    def test_pre_only_and_nf_artifact_gates_are_independent(self):
+        gate = self.section.split("### 7.1", 1)[1].split("### 7.2", 1)[0]
+        self.assertIn("Section 7.2 requires only the pre publication gate", gate)
+        self.assertIn("Sections 7.3–7.5 additionally require the complete selected-profile NF gate", gate)
+        self.assertIn("image_profile=full", gate)
+        self.assertRegex(gate, r"all 23 NF-owned\s+images")
+        self.assertIn("image_profile=cpu-xpu", gate)
+        self.assertIn("18 core/CPU/Intel-XPU", gate)
+        self.assertIn("every Intel\nXPU image remains required", gate)
+        self.assertIn("exactly four NF OCI charts", gate)
+        self.assertIn("do not start Link", gate)
+
 
 if __name__ == "__main__":
     unittest.main()

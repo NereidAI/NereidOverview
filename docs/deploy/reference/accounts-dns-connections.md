@@ -191,11 +191,14 @@ SSO is unhealthy.
 
 ## 5. NereidForge
 
-**Artifact gate:** this reference does not assert that a complete Forge
-development snapshot is available. Use the suite guide's ORAS/chart helpers to
-record and anonymously verify the complete pre and NF artifact sets, their
-resolved immutable versions, and their source commits before starting. Absence
-of that verification stops the deployment before Link.
+**Artifact gates:** this reference does not assert that a complete Forge
+development snapshot is available. The anonymously verified pre installer and
+five supporting charts permit pre-only §7.2. Before NF §§7.3–7.5, separately
+verify the selected NF profile (23 `full` images or 18 `cpu-xpu` images with
+Intel XPU retained) and four NF charts, and record the profile, each resolved
+immutable version, and source commit. Missing NF evidence stops that later stage, not the
+independent pre installation; live Forge acceptance remains mandatory before
+Link.
 
 ### Accounts and storage
 
