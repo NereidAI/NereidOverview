@@ -50,12 +50,13 @@ image digests as deployment evidence. Use the resolved short-SHA snapshot only
 for deliberate reproduction. Formal deployments must select a published,
 anonymously verified bare-SemVer version instead.
 
-> **Current full-suite boundary:** Forge does not yet have a complete public
-> installation channel. Its rolling channel contains backend/frontend images
-> only. No complete nine-chart/23-image Forge release or public Release
-> installer has been verified. On an empty cluster, stop after Horizon; do not
-> proceed to Link until a complete Forge release satisfies the installation
-> guide's gate. Link's verified chart does not remove that dependency.
+> **Full-suite boundary:** Forge uses a gated development installation path, not
+> a formal-release prerequisite. The pre installer and five supporting charts,
+> plus all 23 NF-owned images and four NF charts, must pass the installation
+> guide's anonymous artifact gate. Backend/frontend images alone are
+> insufficient. Stop after Horizon whenever that evidence is absent, and do not
+> proceed to Link until live Forge and SeaweedFS acceptance also passes. Link's
+> verified chart does not remove that dependency.
 
 ## Operator workspace
 
@@ -67,14 +68,18 @@ Keep site inputs outside every Git checkout:
 
 ```text
 $HOME/.nereidai-deployment/
+├── deployment.env   # persistent non-secret selectors, paths, and site inputs
 ├── deploy-values/   # site values, rendered values, and generated hand-offs
 ├── secret-store/    # persistent generated operator-supplied secrets
 ├── deploy-logs/     # resolved digests, deployment, and acceptance records
 └── chart-archives/  # single resolved packages used for values and installation
 ```
 
-Use restrictive directory and file permissions. Initialize the private secret
-store with `scripts/generate-suite-secrets.py`, render each product's private
+Create `deployment.env` from the installation guide once, then run
+`source scripts/load-deployment-env.sh` in each operator shell to restore its
+selectors, paths, resolved identities, and download helpers. Use restrictive
+directory and file permissions. Initialize the private secret store with
+`scripts/generate-suite-secrets.py`, render each product's private
 values from a non-secret `site-values.yaml`, and never commit real domains,
 addresses, values, stores, or hand-off files. The tool preserves existing
 secrets across repeated renders and requires the exact Forge credential

@@ -5,15 +5,15 @@ Start with a ready, empty, Rancher-managed k3s cluster from
 by the operator and accepted before the next phase starts.
 
 Products install directly from versioned public GHCR OCI charts. No product
-source checkout is needed. NereidOverview supplies the shared prerequisite
-manifests and this runbook; product repositories remain the chart sources of
-truth.
+source checkout is needed for installation. NereidOverview supplies the shared
+prerequisite manifests and this runbook; product repositories remain the chart
+sources of truth.
 
 > **Current stop point:** the independent pre-NereidForge plus NereidForge Helm
-> installation contract is implemented, but no complete pair of formal releases
-> has passed the §7 publication and live-acceptance gates. On an empty cluster,
-> complete §§4–6 and stop at §7. Do not install Link until NereidForge and its
-> SeaweedFS have passed final acceptance.
+> installation contract uses the anonymous `0.0.0-dev` artifact channel. Start
+> §7 only after both development publication workflows have passed their
+> anonymous artifact gates. Live NF and SeaweedFS acceptance is still required;
+> do not install Link until that acceptance passes.
 
 ## 1. Verified development channel and installation scope
 
@@ -37,110 +37,92 @@ short-SHA chart `version` and `appVersion`, so its suite images use the same
 immutable snapshot. Third-party images retain their public upstream coordinates
 and pinned versions.
 
-Set the normal development selections once; no per-commit version edit is
-needed:
-
-```bash
-export NEREIDIDENTITY_VERSION=0.0.0-dev
-export NEREIDSPHERE_VERSION=0.0.0-dev
-export NEREIDHORIZON_VERSION=0.0.0-dev
-export NEREIDLINK_VERSION=0.0.0-dev
-```
+The pre-NereidForge installer and NereidForge charts also use `0.0.0-dev`.
+Section 2 writes every selector to one persistent `deployment.env`; no per-shell
+version exports or per-commit edits are needed. Pre and NF resolve their floating
+selectors independently to immutable `0.0.0-dev-<short-sha>` artifacts.
 
 Record each resolved chart OCI digest and internal version, the running image
 IDs/digests, selected kubecontext, and installation date in the deployment
-hand-off. For deliberate reproduction, replace a floating selector with its
-resolved `0.0.0-dev-<short-sha>` version only after anonymously verifying that
-snapshot. For a formal deployment, use a selected bare-SemVer release only
-after that exact chart and all its images have passed anonymous verification.
-Do not infer a release version from these examples.
+hand-off. For deliberate reproduction, replace a floating selector in
+`deployment.env` with its resolved `0.0.0-dev-<short-sha>` version only after
+anonymously verifying that snapshot. Do not infer or invent release versions.
 
 ## 2. Operator environment
 
-Required tools on the operator host: Helm with OCI support, `kubectl`, `tar`,
-`curl`, `openssl`, and Python 3 with PyYAML. The operator host and every cluster
-node must reach all public artifact registries referenced by the charts. DNS and
-TLS must be valid for every product endpoint.
+Required tools on the operator host: Helm with OCI support, ORAS 1.4 or newer,
+`kubectl`, `git`, `tar`, `curl`, `openssl`, and Python 3 with PyYAML. The
+operator host and every cluster node must reach all public artifact registries
+referenced by the charts. DNS and TLS must be valid for every product endpoint.
 
-Run the shell examples from the NereidOverview repository root. Keep all site
-state outside Git:
+Run the shell examples from the NereidOverview repository root. Create the
+persistent, non-secret environment only on the first run. Later runs preserve
+all edits and resolved identities:
 
 ```bash
-export DEPLOYMENT_ROOT="${DEPLOYMENT_ROOT:-$HOME/.nereidai-deployment}"
+DEPLOYMENT_ROOT="${DEPLOYMENT_ROOT:-$HOME/.nereidai-deployment}"
+umask 077
+install -d -m 700 "$DEPLOYMENT_ROOT"
+if [[ ! -e "$DEPLOYMENT_ROOT/deployment.env" ]]; then
+  {
+    printf 'export DEPLOYMENT_ROOT=%q\n' "$DEPLOYMENT_ROOT"
+    cat <<'EOF'
 export DEPLOY_VALUES_ROOT="$DEPLOYMENT_ROOT/deploy-values"
 export DEPLOY_LOG_ROOT="$DEPLOYMENT_ROOT/deploy-logs"
-umask 077
-install -d -m 700 "$DEPLOYMENT_ROOT" "$DEPLOY_VALUES_ROOT" "$DEPLOY_LOG_ROOT" \
+export NEREIDIDENTITY_VERSION=0.0.0-dev
+export NEREIDSPHERE_VERSION=0.0.0-dev
+export NEREIDHORIZON_VERSION=0.0.0-dev
+export PRE_VERSION=0.0.0-dev
+export NEREIDFORGE_VERSION=0.0.0-dev
+export NEREIDLINK_VERSION=0.0.0-dev
+export PRE_HANDOFF_DIR="$DEPLOY_VALUES_ROOT/nereidforge"
+export PRE_RELEASE_DIR="$DEPLOYMENT_ROOT/pre-nereidforge/$PRE_VERSION"
+export PRE_ENV_FILE="$PRE_HANDOFF_DIR/site.env"
+export NF_SECRET_DIR="$DEPLOYMENT_ROOT/secrets/nereidforge"
+export NF_VALUES_FILE="$PRE_HANDOFF_DIR/values.generated.yaml"
+export NF_OPERATOR_VALUES_FILE="$PRE_HANDOFF_DIR/operator-values.yaml"
+# Edit and uncomment these two non-secret site values before section 4.2:
+# export NFS_SERVER=nfs.example.org
+# export NFS_EXPORT=/srv/nfs/nereidai
+unset PRE_RESOLVED_VERSION PRE_SOURCE_COMMIT PRE_ROOT NEREIDFORGE_RESOLVED_VERSION
+if [[ -s "$PRE_RELEASE_DIR/resolved-version.txt" ]]; then
+  export PRE_RESOLVED_VERSION="$(cat "$PRE_RELEASE_DIR/resolved-version.txt")"
+  export PRE_SOURCE_COMMIT="$(cat "$PRE_RELEASE_DIR/source-commit.txt")"
+  export PRE_ROOT="$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_RESOLVED_VERSION"
+fi
+if [[ -s "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt" ]]; then
+  export NEREIDFORGE_RESOLVED_VERSION="$(cat "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt")"
+fi
+EOF
+  } > "$DEPLOYMENT_ROOT/deployment.env"
+fi
+chmod 600 "$DEPLOYMENT_ROOT/deployment.env"
+source scripts/load-deployment-env.sh
+install -d -m 700 "$DEPLOY_VALUES_ROOT" "$DEPLOY_LOG_ROOT" \
   "$DEPLOYMENT_ROOT/chart-archives"
 for product in nereididentity nereidsphere nereidhorizon nereidforge nereidlink; do
   install -d -m 700 "$DEPLOY_VALUES_ROOT/$product" "$DEPLOY_LOG_ROOT/$product"
 done
 
-# Resolve a floating selector once. The log records its OCI digest and internal
-# version; only the archive path is returned for use by values and installation.
-pull_nereid_chart() (
-  set -euo pipefail
-  local product="$1" selector="$2" pull_dir archive
-  pull_dir="$(mktemp -d "$DEPLOYMENT_ROOT/chart-archives/${product}.XXXXXX")"
-  helm pull "oci://ghcr.io/nereidai/charts/${product}" \
-    --version "$selector" --destination "$pull_dir" 2>&1 \
-    | tee "$DEPLOY_LOG_ROOT/$product/chart-pull.txt" >&2
-  archive="$(find "$pull_dir" -maxdepth 1 -type f -name "${product}-*.tgz" -print -quit)"
-  test -s "$archive"
-  helm show chart "$archive" | tee "$DEPLOY_LOG_ROOT/$product/chart-metadata.txt" >&2
-  printf '%s\n' "$archive"
-)
-
-record_nereid_images() (
-  set -euo pipefail
-  local product="$1" pod_json
-  pod_json="$(mktemp "$DEPLOY_LOG_ROOT/$product/pods.XXXXXX.json")"
-  trap 'rm -f "$pod_json"' EXIT
-  kubectl -n "$product" get pods -o json > "$pod_json"
-  python3 - "$pod_json" <<'PY' | tee "$DEPLOY_LOG_ROOT/$product/image-digests.txt"
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as source:
-    pods = json.load(source).get("items")
-if not isinstance(pods, list) or not pods:
-    raise SystemExit("no pods found; refusing to record empty image evidence")
-
-lines = []
-for pod in pods:
-    pod_name = pod.get("metadata", {}).get("name", "<unnamed>")
-    spec = pod.get("spec", {})
-    status = pod.get("status", {})
-    for field, status_field, label in (
-        ("initContainers", "initContainerStatuses", "initContainer"),
-        ("containers", "containerStatuses", "container"),
-    ):
-        statuses = {
-            item.get("name"): item
-            for item in status.get(status_field, [])
-            if isinstance(item, dict)
-        }
-        for container in spec.get(field, []) or []:
-            name = container.get("name", "")
-            image = container.get("image", "")
-            image_id = statuses.get(name, {}).get("imageID", "")
-            if not name or not image or "sha256:" not in image_id:
-                raise SystemExit(
-                    f"missing image or image digest for {pod_name} {label}/{name or '<unnamed>'}; "
-                    "wait for image pulls and ready status before recording evidence"
-                )
-            lines.append(f"{pod_name}\n  {label}/{name} image={image}\n  {label}/{name} imageID={image_id}")
-if not lines:
-    raise SystemExit("no containers found; refusing to record empty image evidence")
-print("\n".join(lines))
-PY
-)
-
 kubectl config current-context
 kubectl get nodes
 kubectl get namespaces
 helm version
+oras version
 ```
+
+For every later shell, including after a disconnect, restore the selectors,
+paths, resolved versions, and helper functions with one command:
+
+```bash
+source scripts/load-deployment-env.sh
+```
+
+The default root is `$HOME/.nereidai-deployment`. If you deliberately selected a
+different root, prefix that command with the same `DEPLOYMENT_ROOT=/path` value.
+Do not add credentials to `deployment.env`; the separate private files below
+retain them. Rerunning the initialization block never replaces an existing
+`deployment.env`, values file, Secret store, or password.
 
 Confirm that the displayed context is the intended empty cluster. Stop if it is
 not. Replace every reserved `example.org` name and example NFS endpoint below
@@ -156,7 +138,7 @@ Create DNS records through the site's ingress address before product setup:
 | `sso.example.org` | NereidIdentity issuer and login |
 | `nereidsphere.example.org` | Suite portal and ticket verification |
 | `nereidhorizon.example.org` | Horizon console and API |
-| `nereidforge.example.org` | Forge console, after its release gate |
+| `nereidforge.example.org` | Forge console, after its development artifact gate |
 | `labelstudio.nereidforge.example.org` | Forge Label Studio |
 | `cvat.nereidforge.example.org` | Forge CVAT |
 | `seaweedfs-s3.nereidforge.example.org` | Public S3 route required for external object downloads |
@@ -254,11 +236,11 @@ done
 
 ### 4.2 NFS CSI StorageClass
 
-Prepare the NFS export and node NFS client support first. Reuse the exact
-`NFS_SERVER` and `NFS_EXPORT` values recorded in
-[`cluster-bootstrap.md` §3.4](cluster-bootstrap.md#34-nfs-service-and-clients).
-If this is a new shell, export those actual site values again before running
-this block:
+Prepare the NFS export and node NFS client support first. Edit `deployment.env`
+to reuse the exact `NFS_SERVER` and `NFS_EXPORT` values recorded in
+[`cluster-bootstrap.md` §3.4](cluster-bootstrap.md#34-nfs-service-and-clients),
+then run `source scripts/load-deployment-env.sh`. The checks below fail closed
+if either persistent value is still unset:
 
 ```bash
 : "${NFS_SERVER:?Set NFS_SERVER to the actual NFS host}"
@@ -540,59 +522,31 @@ NereidForge owns only its 23 application images and four OCI charts. Do not use
 the retired monolithic Forge installer, a Kubeflow umbrella chart, or an NF
 source-tree installation.
 
-### 7.1 Formal publication gate
+### 7.1 Development artifact gate
 
-Select both versions only after their exact formal tags and anonymous
-verification evidence are available:
+Use the `PRE_VERSION=0.0.0-dev` and `NEREIDFORGE_VERSION=0.0.0-dev` selections
+already loaded from `deployment.env`. Start only after the relevant main-branch
+publication runs have completed their anonymous verification:
 
-- `pre-nereidforge/v<PRE_VERSION>`: five OCI charts, the versioned pre source
-  installer, checksum, lock, and chart manifest;
-- `v<NEREIDFORGE_VERSION>`: all 23 NF-owned images, four OCI charts, and the
-  image/chart manifests; and
-- anonymous pull/render or image-manifest verification for every selected
-  artifact, tied to a documented source commit.
+- `pre-nereidforge-publish-dev`: the ORAS pre installer and all five supporting
+  charts, each with matching floating and immutable identities;
+- `publish-dev`: all 23 NF-owned images and exactly four NF OCI charts, with
+  anonymous manifest and chart pull/render verification; and
+- a recorded resolved `0.0.0-dev-<short-sha>` identity and source commit for
+  each part. The two resolved versions are independent and need not match.
 
-The versions are independent; do not infer one from the other. There is no NF
-source-installer asset. The fourth NF chart, `nereidforge-tenant-check`, is for
-verification and is not an application release.
-
-**The complete formal release pair has not yet been published and accepted.
-Do not substitute rolling tags for the placeholders below. The commands become
-eligible only after this gate and remain manual operator steps.**
-
-```bash
-export PRE_VERSION=<verified-pre-version>
-export NEREIDFORGE_VERSION=<verified-nf-version>
-```
+There is no NF source-installer asset or formal-release prerequisite. The
+fourth NF chart, `nereidforge-tenant-check`, is verification-only and is not an
+application release. The commands below remain manual operator steps.
 
 ### 7.2 Install and accept pre-NereidForge
 
-Download and verify the pre installer anonymously, then extract it outside Git:
+Resolve and pull the ORAS pre installer anonymously, verify its digest, file
+set, and checksum, then extract it outside Git. The helper persists the resolved
+non-secret version and source commit so a later shell can restore `PRE_ROOT`:
 
 ```bash
-export PRE_HANDOFF_DIR="$DEPLOY_VALUES_ROOT/nereidforge"
-export PRE_RELEASE_DIR="$DEPLOYMENT_ROOT/pre-nereidforge/$PRE_VERSION"
-export PRE_DOWNLOAD="https://github.com/NereidAI/NereidForge/releases/download/pre-nereidforge/v$PRE_VERSION"
-install -d -m 700 "$PRE_HANDOFF_DIR" "$PRE_RELEASE_DIR"
-curl --fail --location \
-  "$PRE_DOWNLOAD/pre-nereidforge-installer-$PRE_VERSION.tar.gz" \
-  --output "$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_VERSION.tar.gz"
-curl --fail --location \
-  "$PRE_DOWNLOAD/pre-nereidforge-installer-$PRE_VERSION.tar.gz.sha256" \
-  --output "$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_VERSION.tar.gz.sha256"
-curl --fail --location \
-  "$PRE_DOWNLOAD/pre-nereidforge-installer-$PRE_VERSION.lock.json" \
-  --output "$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_VERSION.lock.json"
-curl --fail --location \
-  "$PRE_DOWNLOAD/pre-nereidforge-charts-$PRE_VERSION.txt" \
-  --output "$PRE_RELEASE_DIR/pre-nereidforge-charts-$PRE_VERSION.txt"
-(
-  cd "$PRE_RELEASE_DIR"
-  sha256sum -c "pre-nereidforge-installer-$PRE_VERSION.tar.gz.sha256"
-  tar -xzf "pre-nereidforge-installer-$PRE_VERSION.tar.gz"
-)
-export PRE_ROOT="$PRE_RELEASE_DIR/pre-nereidforge-installer-$PRE_VERSION"
-export PRE_ENV_FILE="$PRE_HANDOFF_DIR/site.env"
+PRE_ROOT="$(pull_pre_nereidforge_installer "$PRE_VERSION")"
 test -s "$PRE_ROOT/install-lock.json"
 if [[ ! -e "$PRE_ENV_FILE" ]]; then
   install -m 600 /dev/null "$PRE_ENV_FILE"
@@ -656,7 +610,6 @@ the SSO secret from the existing Sphere `forge` product secret store instead of
 inventing a different value:
 
 ```bash
-export NF_SECRET_DIR="$DEPLOYMENT_ROOT/secrets/nereidforge"
 install -d -m 700 "$NF_SECRET_DIR"
 test -s "$NF_SECRET_DIR/jwt" || openssl rand -hex 32 | tr -d '\n' > "$NF_SECRET_DIR/jwt"
 test -s "$NF_SECRET_DIR/admin-password" || \
@@ -721,23 +674,32 @@ CNPG, SeaweedFS, KFP artifact, CA, runtime, and administrator contracts.
 ### 7.4 Run preflight and install the three NF application charts
 
 ```bash
-export NF_VALUES_FILE="$PRE_HANDOFF_DIR/values.generated.yaml"
-export NF_OPERATOR_VALUES_FILE="$PRE_HANDOFF_DIR/operator-values.yaml"
+NEREIDFORGE_BACKEND_CHART="$(pull_nereid_chart nereidforge-backend "$NEREIDFORGE_VERSION")"
+NEREIDFORGE_FRONTEND_CHART="$(pull_nereid_chart nereidforge-frontend "$NEREIDFORGE_VERSION")"
+NEREIDFORGE_ML_BACKEND_CHART="$(pull_nereid_chart nereidforge-ml-backend "$NEREIDFORGE_VERSION")"
+test -s "$NEREIDFORGE_BACKEND_CHART"
+test -s "$NEREIDFORGE_FRONTEND_CHART"
+test -s "$NEREIDFORGE_ML_BACKEND_CHART"
+NEREIDFORGE_RESOLVED_VERSION="$(helm show chart "$NEREIDFORGE_BACKEND_CHART" | awk '/^version:/ {print $2; exit}')"
+for chart in "$NEREIDFORGE_FRONTEND_CHART" "$NEREIDFORGE_ML_BACKEND_CHART"; do
+  test "$(helm show chart "$chart" | awk '/^version:/ {print $2; exit}')" = \
+    "$NEREIDFORGE_RESOLVED_VERSION"
+done
+printf '%s\n' "$NEREIDFORGE_RESOLVED_VERSION" \
+  > "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
+chmod 600 "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
 bash "$PRE_ROOT/scripts/40_check-nf-handoff.sh"
 
-helm upgrade --install nereidforge-backend \
-  oci://ghcr.io/nereidai/charts/nereidforge-backend \
-  --version "$NEREIDFORGE_VERSION" --namespace nereidforge \
+helm upgrade --install nereidforge-backend "$NEREIDFORGE_BACKEND_CHART" \
+  --namespace nereidforge \
   -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
   --wait --timeout 10m
-helm upgrade --install nereidforge-frontend \
-  oci://ghcr.io/nereidai/charts/nereidforge-frontend \
-  --version "$NEREIDFORGE_VERSION" --namespace nereidforge \
+helm upgrade --install nereidforge-frontend "$NEREIDFORGE_FRONTEND_CHART" \
+  --namespace nereidforge \
   -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
   --wait --timeout 10m
-helm upgrade --install ml-backend \
-  oci://ghcr.io/nereidai/charts/nereidforge-ml-backend \
-  --version "$NEREIDFORGE_VERSION" --namespace nereidforge \
+helm upgrade --install ml-backend "$NEREIDFORGE_ML_BACKEND_CHART" \
+  --namespace nereidforge \
   -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
   --wait --timeout 10m
 ```
@@ -762,18 +724,23 @@ record_nereid_images nereidforge
 ```
 
 Run the NF fail-closed verifier from a verification-only checkout of the exact
-selected NF tag. This checkout supplies test tooling only; it is not an
-installation package and installs nothing:
+resolved development commit. This checkout supplies test tooling only; it is not
+an installation package and installs nothing:
 
 ```bash
+NEREIDFORGE_SHORT_SHA="${NEREIDFORGE_RESOLVED_VERSION#0.0.0-dev-}"
+[[ "$NEREIDFORGE_SHORT_SHA" =~ ^[0-9a-f]{7}$ ]]
+NF_VERIFIER_DIR="$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_RESOLVED_VERSION"
 install -d -m 700 "$DEPLOYMENT_ROOT/verifiers"
-if [[ ! -d "$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_VERSION/.git" ]]; then
-  git clone --depth 1 --branch "v$NEREIDFORGE_VERSION" \
-    https://github.com/NereidAI/NereidForge.git \
-    "$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_VERSION"
+if [[ ! -d "$NF_VERIFIER_DIR/.git" ]]; then
+  git clone --filter=blob:none --no-checkout \
+    https://github.com/NereidAI/NereidForge.git "$NF_VERIFIER_DIR"
 fi
+git -C "$NF_VERIFIER_DIR" cat-file -e "${NEREIDFORGE_SHORT_SHA}^{commit}"
+git -C "$NF_VERIFIER_DIR" checkout --detach "$NEREIDFORGE_SHORT_SHA"
+[[ "$(git -C "$NF_VERIFIER_DIR" rev-parse HEAD)" == "$NEREIDFORGE_SHORT_SHA"* ]]
 NF_ENV_FILE="$PRE_ENV_FILE" NF_HANDOFF_DIR="$PRE_HANDOFF_DIR" \
-  bash "$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_VERSION/scripts/60_verify/nf-check.sh"
+  bash "$NF_VERIFIER_DIR/scripts/60_verify/nf-check.sh"
 ```
 
 The verifier reads the administrator password from the existing Secret when no

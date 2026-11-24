@@ -191,10 +191,11 @@ SSO is unhealthy.
 
 ## 5. NereidForge
 
-**Artifact gate:** no Forge OCI or Release URL is specified here, and this
-reference does not assert that a formal Forge artifact is available. Record and
-verify a complete public installation source and exact version before starting.
-Absence of that verification stops the deployment before Link.
+**Artifact gate:** this reference does not assert that a complete Forge
+development snapshot is available. Use the suite guide's ORAS/chart helpers to
+record and anonymously verify the complete pre and NF artifact sets, their
+resolved immutable versions, and their source commits before starting. Absence
+of that verification stops the deployment before Link.
 
 ### Accounts and storage
 

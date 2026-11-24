@@ -19,9 +19,12 @@ workflows.
 - Installation requires internet access from the operator host and cluster
   nodes to every referenced public artifact registry.
 
-A chart or image coordinate may be added to public installation documentation
-only after that exact version has passed anonymous pull verification. CI success
-alone does not prove public availability.
+An ungated installation example or availability claim may reference a chart or
+image coordinate only after that exact version has passed anonymous pull
+verification. CI success alone does not prove public availability. A gated
+runbook may describe a development coordinate before its first complete
+publication only when it explicitly stops installation until the anonymous
+artifact gate passes and never asserts that the artifact is already available.
 
 ## 15.2 Chart source and metadata
 
@@ -91,26 +94,29 @@ pull/render and anonymous image-manifest check. For the development channel,
 verification also proves that floating and immutable chart tags resolve to the
 same OCI digest and byte-identical archive.
 
-## 15.4 Forge release boundary
+## 15.4 Forge development boundary
 
-Forge's rolling channel publishes backend and frontend images only. It is not a
-complete Forge installation channel. Do not publish or document a partial Forge
-chart channel.
+The complete Forge development snapshot comprises the independent
+pre-NereidForge ORAS installer and five supporting charts, followed by all 23
+NF-owned images and exactly four NF charts. A formal release is not required.
+The fourth NF chart, `nereidforge-tenant-check`, is verification-only; only the
+backend, frontend, and ML backend charts install applications. There is no NF
+source-installer artifact.
 
-No complete formal Forge release has currently passed anonymous public
-verification. Until one selected formal version's complete required images,
-active charts, installer, checksums/manifests, and staged installation procedure
-have all been retrieved and verified anonymously, do not name individual Forge
-release assets or chart coordinates, provide their URLs, or claim that a
-supported Forge installation channel exists.
+Backend/frontend images or a subset of charts alone are not a complete Forge
+installation channel. Start Forge installation only after both development
+publication workflows have passed their anonymous artifact gates and the
+operator has recorded each independently resolved immutable version, OCI digest,
+and source commit. Until that evidence exists, stop after Horizon and do not
+claim that a complete public Forge snapshot is available. Artifact availability
+does not waive live NF and SeaweedFS acceptance, which remains mandatory before
+Link.
 
-After that gate is satisfied, document only the verified version and its actual
-artifact metadata. Every required image job must succeed before chart
-publication; upstream wrapper metadata remains independent. A published Release
-and its existing assets are immutable and must never be replaced by a rerun.
-The legacy Kubeflow Helm umbrella is not an installation artifact; Kubeflow
-integration uses the selected release's verified Kustomize stages and vendored
-manifests.
+Every required image job must succeed before NF chart publication; upstream
+wrapper metadata remains independent. Immutable artifacts must never be
+overwritten by a rerun. The legacy Kubeflow Helm umbrella is not an installation
+artifact; Kubeflow integration uses the pre installer's verified ordered
+Kustomize stages and vendored manifests.
 
 ## 15.5 Central installation contract
 

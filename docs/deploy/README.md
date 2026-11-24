@@ -8,10 +8,10 @@ suite documentation.
 > **Availability gate:** Identity, Sphere, Horizon, and Link have verified
 > floating `0.0.0-dev` development artifacts; see the
 > [dated evidence snapshot](reference/development-artifacts-2026-11-22.md) for
-> their resolved versions and digests. Forge does not yet have a complete
-> public installation channel. On an empty cluster, stop after Horizon and wait
-> for a verified complete Forge release. Never install Link without healthy
-> Forge SeaweedFS.
+> their resolved versions and digests. Forge uses the gated development
+> procedure in §7: the complete pre and NF artifact sets must pass anonymous
+> verification before installation. Stop after Horizon whenever that evidence is
+> absent. Never install Link without accepted Forge and healthy Forge SeaweedFS.
 
 ```mermaid
 flowchart LR
@@ -24,7 +24,7 @@ flowchart LR
     I["NereidIdentity"]:::phase
     S["NereidSphere"]:::phase
     H["NereidHorizon"]:::phase
-    F["NereidForge<br/>complete public release required"]:::blocked
+    F["NereidForge<br/>complete development artifact and acceptance gates"]:::blocked
     L["NereidLink"]:::phase
     E["Open Horizon edge delivery"]:::host
     M["Separate ESS model delivery"]:::host
@@ -36,7 +36,7 @@ flowchart LR
     click I "install-suite.md#5-phase-1--nereididentity"
     click S "install-suite.md#61-nereidsphere"
     click H "install-suite.md#62-nereidhorizon"
-    click F "install-suite.md#7-forge-availability-gate"
+    click F "install-suite.md#71-development-artifact-gate"
     click L "install-suite.md#8-nereidlink-after-forge"
     click E "install-suite.md#9-open-horizon-edge-delivery"
     click M "install-suite.md#9-open-horizon-edge-delivery"

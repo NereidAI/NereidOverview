@@ -44,5 +44,5 @@ multi-replica Valkey mode and direct OIDC on Horizon and Link.
 
 This is public artifact and rendering evidence, not cluster acceptance. Link's
 artifact availability does not waive the Forge gate: installation still stops
-after Horizon until a complete formal Forge release and its healthy SeaweedFS
-hand-off are verified.
+after Horizon until the suite guide's complete Forge development artifact gate
+and its healthy SeaweedFS hand-off are verified.
