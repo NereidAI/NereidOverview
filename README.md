@@ -50,13 +50,14 @@ image digests as deployment evidence. Use the resolved short-SHA snapshot only
 for deliberate reproduction. Formal deployments must select a published,
 anonymously verified bare-SemVer version instead.
 
-> **Full-suite boundary:** Forge uses a gated development installation path, not
-> a formal-release prerequisite. The pre installer and five supporting charts,
-> plus all 23 NF-owned images and four NF charts, must pass the installation
-> guide's anonymous artifact gate. Backend/frontend images alone are
-> insufficient. Stop after Horizon whenever that evidence is absent, and do not
-> proceed to Link until live Forge and SeaweedFS acceptance also passes. Link's
-> verified chart does not remove that dependency.
+> **Full-suite boundary:** Forge uses independently gated development stages,
+> not a formal-release prerequisite. The verified pre installer and five
+> supporting charts are sufficient to start pre-only §7.2. The selected NF
+> profile (23 `full` images, or 18 `cpu-xpu` images retaining Intel XPU) and four
+> NF charts must separately pass anonymous verification before NF §§7.3–7.5;
+> backend/frontend images alone are insufficient. Do not proceed
+> to Link until live Forge and SeaweedFS acceptance also passes. Link's verified
+> chart does not remove that dependency.
 
 ## Operator workspace
 

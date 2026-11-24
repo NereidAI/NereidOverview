@@ -97,20 +97,24 @@ same OCI digest and byte-identical archive.
 ## 15.4 Forge development boundary
 
 The complete Forge development snapshot comprises the independent
-pre-NereidForge ORAS installer and five supporting charts, followed by all 23
-NF-owned images and exactly four NF charts. A formal release is not required.
-The fourth NF chart, `nereidforge-tenant-check`, is verification-only; only the
-backend, frontend, and ML backend charts install applications. There is no NF
-source-installer artifact.
+pre-NereidForge ORAS installer and five supporting charts, followed by exactly
+four NF charts and one selected NF image profile: all 23 images for `full`, or
+18 core/CPU/Intel-XPU images for `cpu-xpu`. The latter excludes only the five
+AMD/NVIDIA trainer images; Intel XPU images remain mandatory. A formal release
+is not required. The fourth NF chart, `nereidforge-tenant-check`, is
+verification-only; only the backend, frontend, and ML backend charts install
+applications. There is no NF source-installer artifact.
 
 Backend/frontend images or a subset of charts alone are not a complete Forge
-installation channel. Start Forge installation only after both development
-publication workflows have passed their anonymous artifact gates and the
-operator has recorded each independently resolved immutable version, OCI digest,
-and source commit. Until that evidence exists, stop after Horizon and do not
-claim that a complete public Forge snapshot is available. Artifact availability
-does not waive live NF and SeaweedFS acceptance, which remains mandatory before
-Link.
+installation channel. The gates are independently enforceable: the anonymously
+verified pre installer and five supporting charts permit pre-only §7.2, while
+every image in the selected `full` or `cpu-xpu` profile and all four NF charts
+must pass their separate anonymous gate before NF §§7.3–7.5. Record the image
+profile, each resolved immutable version, OCI digest, and source commit. Missing
+NF evidence stops the operator after pre acceptance; it
+does not block or invalidate a pre-only installation. Do not claim a complete
+public Forge snapshot until both gates pass. Artifact availability does not
+waive live NF and SeaweedFS acceptance, which remains mandatory before Link.
 
 Every required image job must succeed before NF chart publication; upstream
 wrapper metadata remains independent. Immutable artifacts must never be

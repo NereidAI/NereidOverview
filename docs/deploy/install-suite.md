@@ -9,11 +9,12 @@ source checkout is needed for installation. NereidOverview supplies the shared
 prerequisite manifests and this runbook; product repositories remain the chart
 sources of truth.
 
-> **Current stop point:** the independent pre-NereidForge plus NereidForge Helm
-> installation contract uses the anonymous `0.0.0-dev` artifact channel. Start
-> §7 only after both development publication workflows have passed their
-> anonymous artifact gates. Live NF and SeaweedFS acceptance is still required;
-> do not install Link until that acceptance passes.
+> **Current stop point:** pre-NereidForge and NereidForge have independent
+> anonymous `0.0.0-dev` artifact gates. Section 7.2 requires only the verified
+> pre installer and five supporting charts. Do not start NF §§7.3–7.5 until the
+> selected NF profile (23 `full` images, or 18 `cpu-xpu` images retaining Intel
+> XPU) and four NF charts pass their separate gate. Live NF and
+> SeaweedFS acceptance is still required; do not install Link until it passes.
 
 ## 1. Verified development channel and installation scope
 
@@ -51,9 +52,57 @@ anonymously verifying that snapshot. Do not infer or invent release versions.
 ## 2. Operator environment
 
 Required tools on the operator host: Helm with OCI support, ORAS 1.4 or newer,
-`kubectl`, `git`, `tar`, `curl`, `openssl`, and Python 3 with PyYAML. The
+`kubectl`, `git`, `tar`, `curl`, `openssl`, `base64`, `sha256sum`, `htpasswd`,
+`envsubst`, and Python 3 with PyYAML. Pre-NereidForge also needs Python `boto3`;
+its exact interpreter selection and preflight appear in §7.2. On Ubuntu,
+`apache2-utils` provides `htpasswd` and `gettext-base` provides `envsubst`. The
 operator host and every cluster node must reach all public artifact registries
 referenced by the charts. DNS and TLS must be valid for every product endpoint.
+
+### ORAS CLI installation
+
+ORAS is required only on the operator host, not inside the cluster. The pre
+installer helpers use it to resolve OCI digests, read source-version annotations,
+and anonymously download the installer archive and checksum files. Install ORAS
+1.4 or newer and ensure every later shell can find `oras` through `PATH`.
+
+For Linux, the following commands install the pinned ORAS 1.4.0 release from the
+official project and verify its published SHA-256 checksum before installation.
+The architecture mapping supports amd64, arm64, armv7, and loong64; stop on any
+download or checksum failure rather than installing an unverified binary:
+
+```bash
+(
+  set -euo pipefail
+  ORAS_VERSION=1.4.0
+  ARCH="$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/' \
+    -e 's/armv7l/armv7/' -e 's/loongarch64/loong64/')"
+  case "$ARCH" in amd64|arm64|armv7|loong64) ;; *)
+    echo "Unsupported ORAS architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+  ARCHIVE="oras_${ORAS_VERSION}_linux_${ARCH}.tar.gz"
+  CHECKSUMS="oras_${ORAS_VERSION}_checksums.txt"
+  RELEASE="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}"
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+  cd "$WORK"
+  curl -fLO "$RELEASE/$ARCHIVE"
+  curl -fLO "$RELEASE/$CHECKSUMS"
+  sha256sum --ignore-missing -c "$CHECKSUMS"
+  mkdir oras-install
+  tar -xzf "$ARCHIVE" -C oras-install
+  sudo install -o root -g root -m 0755 oras-install/oras /usr/local/bin/oras
+)
+oras version
+```
+
+Confirm that `oras version` reports 1.4.0 or newer and that `command -v oras`
+resolves to the installed binary. For macOS, Windows, package-manager options,
+and optional GPG/provenance verification, use the official
+[ORAS installation guide](https://oras.land/docs/installation) and
+[binary-verification guide](https://oras.land/docs/how_to_guides/verifying_binaries).
+`oras version` is only a local client check; it does not contact a registry or
+change the cluster.
 
 Run the shell examples from the NereidOverview repository root. Create the
 persistent, non-secret environment only on the first run. Later runs preserve
@@ -168,7 +217,9 @@ The tool creates `$DEPLOYMENT_ROOT/secret-store/suite-secrets.json` with mode
 values. Running `init` again preserves every existing value and only adds fields
 introduced by a newer tool version. Keep an encrypted off-cluster backup of this
 store. Do not delete it during an upgrade or attempt to use it as a rotation
-tool.
+tool. Current pre-NereidForge is a separate exception: it neither reads nor
+populates this suite store for its PostgreSQL, SeaweedFS, or Dex initialization;
+§7.2 uses its private `site.env` and live canonical Kubernetes Secrets instead.
 
 Keep non-secret site configuration in each product's `site-values.yaml`.
 **Do not run `render` in this section.** Each product phase below first creates
@@ -512,7 +563,8 @@ Configure Forge and ESS endpoints only after their actual endpoints exist.
 Pattern/agreement delivery and ESS model delivery are separate later steps.
 
 **Current empty-cluster stop point:** accept Identity, Sphere, and Horizon,
-record their health, and stop here until §7's Forge gate can be satisfied.
+record their health, and stop here until §7.2's independent pre gate is
+satisfied. The separate NF gate applies only after pre acceptance.
 
 ## 7. Phase 3 — pre-NereidForge and NereidForge
 
@@ -525,15 +577,24 @@ source-tree installation.
 ### 7.1 Development artifact gate
 
 Use the `PRE_VERSION=0.0.0-dev` and `NEREIDFORGE_VERSION=0.0.0-dev` selections
-already loaded from `deployment.env`. Start only after the relevant main-branch
-publication runs have completed their anonymous verification:
+already loaded from `deployment.env`. The two resolved versions are independent
+and need not match. Record each resolved `0.0.0-dev-<short-sha>` identity, OCI
+digest, and source commit.
 
-- `pre-nereidforge-publish-dev`: the ORAS pre installer and all five supporting
-  charts, each with matching floating and immutable identities;
-- `publish-dev`: all 23 NF-owned images and exactly four NF OCI charts, with
-  anonymous manifest and chart pull/render verification; and
-- a recorded resolved `0.0.0-dev-<short-sha>` identity and source commit for
-  each part. The two resolved versions are independent and need not match.
+**Section 7.2 requires only the pre publication gate**:
+`pre-nereidforge-publish-dev` must have anonymously verified the ORAS pre
+installer and all five supporting charts, each with matching floating and
+immutable identities. A missing or partial NF image publication does not block
+a pre-only installation.
+
+**Sections 7.3–7.5 additionally require the complete selected-profile NF gate**.
+With `image_profile=full`, `publish-dev` must anonymously verify all 23 NF-owned
+images. With `image_profile=cpu-xpu`, it must verify 18 core/CPU/Intel-XPU
+images; only the five AMD/NVIDIA trainer images are excluded, and every Intel
+XPU image remains required. Both profiles require exactly four NF OCI charts,
+including manifest and chart pull/render checks. Record the selected profile and
+its run summary with the resolved version, digests, and source commit. Stop
+after §7.2 acceptance while that evidence is absent, and do not start Link.
 
 There is no NF source-installer asset or formal-release prerequisite. The
 fourth NF chart, `nereidforge-tenant-check`, is verification-only and is not an
@@ -554,25 +615,296 @@ fi
 ```
 
 Edit `site.env` before installing. It is a private pre input file, not a Helm
-values handoff. Set at least the existing pre inputs for PostgreSQL, SeaweedFS,
-and Dex, plus these non-secret NF handoff inputs:
+values handoff. Set these non-secret site and NF handoff inputs:
 
 ```bash
 BASE_DOMAIN=example.org
 STORAGE_CLASS=nfs-csi
 POD_CIDR=10.42.0.0/16
 SERVICE_CIDR=10.43.0.0/16
-DEX_STATIC_EMAIL=admin@example.org
+DEX_STATIC_EMAIL=admin@nereidforge.local
 FRONTEND_HOST=nereidforge.example.org
 SSO_MODE=ns
 SSO_NS_BASE_URL=https://nereidsphere.example.org
 ```
 
-Also retain the required `PG_ADMIN_PASSWORD`, SeaweedFS first-initialization
-credentials, `DEX_STATIC_PASSWORD_HASH`, and the Dex plaintext needed by
-`mr-check.sh` in that mode-0600 file. Quote shell values correctly, especially
-bcrypt hashes. Preserve this file and the existing Kubernetes secret stores on
-upgrades; do not regenerate credentials merely because an installer is rerun.
+The current pre installer uses `admin@nereidforge.local` in its Dex config,
+Kubeflow Profile, and RBAC. Do not substitute an email based on `BASE_DOMAIN`
+unless the installer first makes that identity configurable everywhere.
+
+Current pre-NereidForge does not read or populate `secret-store/suite-secrets.json`.
+Its PostgreSQL, SeaweedFS, and Dex inputs live in `site.env`; back up that file
+and the live Kubernetes Secrets separately. The suite store later supplies only
+the applicable Identity Forge client and Sphere Forge ticket secret.
+
+#### First-installation secrets
+
+Run the following block only for a **genuine first installation**, before any
+PostgreSQL or SeaweedFS credential Secret exists. For an existing or partially
+installed environment, skip to the recovery procedure below instead of
+generating replacements. The helper preserves existing non-empty site values,
+appends only missing assignments, and never prints a credential. On Ubuntu,
+`sudo apt-get install apache2-utils` provides `htpasswd`:
+
+```bash
+(
+  set -euo pipefail
+  source scripts/load-deployment-env.sh
+  command -v htpasswd >/dev/null
+  umask 077
+  install -d -m 700 "$(dirname "$PRE_ENV_FILE")"
+  if [[ ! -e "$PRE_ENV_FILE" ]]; then
+    install -m 600 /dev/null "$PRE_ENV_FILE"
+  fi
+  chmod 600 "$PRE_ENV_FILE"
+
+  unset PG_ADMIN_PASSWORD SEAWEEDFS_S3_ACCESS_KEY SEAWEEDFS_S3_SECRET_KEY
+  unset DEX_STATIC_PASSWORD DEX_STATIC_PASSWORD_HASH
+  set -a
+  source "$PRE_ENV_FILE"
+  set +a
+
+  # A surviving hash without its plaintext is not a recoverable Dex identity.
+  if [[ -n "${DEX_STATIC_PASSWORD_HASH:-}" && -z "${DEX_STATIC_PASSWORD:-}" ]]; then
+    echo "Restore DEX_STATIC_PASSWORD from backup; do not generate a different one" >&2
+    exit 1
+  fi
+
+  record_secret() {
+    local name="$1" value="$2"
+    if [[ -z "${!name:-}" ]]; then
+      printf '%s=%q\n' "$name" "$value" >> "$PRE_ENV_FILE"
+      printf -v "$name" '%s' "$value"
+    fi
+  }
+  record_secret PG_ADMIN_PASSWORD "$(openssl rand -hex 32)"
+  record_secret SEAWEEDFS_S3_ACCESS_KEY "$(openssl rand -hex 16)"
+  record_secret SEAWEEDFS_S3_SECRET_KEY "$(openssl rand -hex 40)"
+  record_secret DEX_STATIC_PASSWORD "$(openssl rand -hex 24)"
+  if [[ -z "${DEX_STATIC_PASSWORD_HASH:-}" ]]; then
+    DEX_HASH="$(
+      printf '%s\n' "$DEX_STATIC_PASSWORD" |
+        htpasswd -inBC 12 "" | tr -d ':\n'
+    )"
+    record_secret DEX_STATIC_PASSWORD_HASH "$DEX_HASH"
+    unset DEX_HASH
+  fi
+  printf 'Private pre inputs retained in %s\n' "$PRE_ENV_FILE"
+)
+```
+
+Do not leave `PG_ADMIN_PASSWORD` empty: older verified pre installers do not
+write their random fallback back to `site.env`. Keep an encrypted off-cluster
+backup. In particular, Link must later reuse the exact first-installation
+SeaweedFS identity rather than generating another one.
+
+#### Existing PostgreSQL Secret recovery
+
+On a rerun, `nereidforge/pg-${PG_CLUSTER_NAME}-credentials` is the retained
+identity. Never overwrite its data merely because `site.env` is missing or
+contains a different password. The following read-only check prints only match
+states. It sources the same defaults as the installer and sends the retained
+password to the database probe over stdin:
+
+```bash
+(
+  set -euo pipefail
+  source scripts/load-deployment-env.sh
+  source "$PRE_ROOT/scripts/lib/config.sh"
+  SECRET_NAME="pg-${PG_CLUSTER_NAME}-credentials"
+  SECRET_PASSWORD="$(
+    kubectl get secret "$SECRET_NAME" -n nereidforge \
+      -o jsonpath='{.data.password}' | base64 -d
+  )"
+  SECRET_USERNAME="$(
+    kubectl get secret "$SECRET_NAME" -n nereidforge \
+      -o jsonpath='{.data.username}' | base64 -d
+  )"
+  [[ "$SECRET_USERNAME" == "$PG_DB_USER" ]] ||
+    { echo 'SECRET_USERNAME=MISMATCH'; exit 1; }
+  if [[ "$SECRET_PASSWORD" == "${PG_ADMIN_PASSWORD:-}" ]]; then
+    echo 'SITE_VS_SECRET=MATCH'
+  else
+    echo 'SITE_VS_SECRET=MISMATCH'
+  fi
+  PG_POD="$(
+    kubectl get pods -n nereidforge \
+      -l "cnpg.io/cluster=$PG_CLUSTER_NAME,cnpg.io/instanceRole=primary" \
+      -o jsonpath='{.items[0].metadata.name}'
+  )"
+  test -n "$PG_POD"
+  if printf '%s\n' "$SECRET_PASSWORD" |
+    kubectl exec -i -n nereidforge "$PG_POD" -c postgres -- \
+      sh -c '
+        IFS= read -r PGPASSWORD
+        export PGPASSWORD
+        psql -h 127.0.0.1 -U "$1" -d "$2" -tAc "SELECT 1" >/dev/null
+      ' sh "$PG_DB_USER" "$PG_DB_NAME"
+  then
+    echo 'DB_VS_SECRET=MATCH'
+  else
+    echo 'DB_VS_SECRET=MISMATCH'
+  fi
+)
+```
+
+If `DB_VS_SECRET=MATCH` but `SITE_VS_SECRET=MISMATCH`, restore only the site
+assignment from the retained Secret. Do not change the Secret or database. This
+snippet also removes duplicate later password assignments and prints no value:
+
+```bash
+(
+  set -euo pipefail
+  source scripts/load-deployment-env.sh
+  source "$PRE_ROOT/scripts/lib/config.sh"
+  RETAINED_PG_PASSWORD="$(
+    kubectl get secret "pg-${PG_CLUSTER_NAME}-credentials" -n nereidforge \
+      -o jsonpath='{.data.password}' | base64 -d
+  )"
+  export RETAINED_PG_PASSWORD PRE_ENV_FILE
+  python3 - <<'PY'
+import os
+from pathlib import Path
+import re
+import shlex
+
+path = Path(os.environ["PRE_ENV_FILE"])
+assignment = "PG_ADMIN_PASSWORD=" + shlex.quote(os.environ["RETAINED_PG_PASSWORD"])
+pattern = re.compile(r"^\s*(?:export\s+)?PG_ADMIN_PASSWORD\s*=")
+lines = path.read_text(encoding="utf-8").splitlines()
+output = []
+for line in lines:
+    if pattern.match(line):
+        if assignment not in output:
+            output.append(assignment)
+    else:
+        output.append(line)
+if assignment not in output:
+    output.append(assignment)
+temporary = path.with_name(f".{path.name}.recovery")
+temporary.write_text("\n".join(output) + "\n", encoding="utf-8")
+temporary.chmod(0o600)
+temporary.replace(path)
+print(f"Retained PostgreSQL site input in {path}; value not displayed")
+PY
+)
+```
+
+Stop for operator-assisted recovery if `DB_VS_SECRET=MISMATCH`; changing a CNPG
+bootstrap Secret after initialization does not safely prove or rotate the
+existing database role password. The SeaweedFS canonical Secret
+`nereidforge/seaweedfs-s3-credentials` is likewise authoritative on reruns.
+Never generate replacement S3 site values when it exists; retain or recover the
+same identity for the later Link handoff.
+
+#### Fail-closed preflight
+
+Register the locked CloudNativePG dependency repository before the stages:
+
+```bash
+helm repo add cloudnative-pg https://cloudnative-pg.io/charts --force-update
+helm repo update cloudnative-pg
+```
+
+Then run this local/read-only preflight as one fail-closed block. PostgreSQL
+site input is required only when its canonical Secret is absent. S3 site input
+is required only when the canonical Secret and both legacy config sources are
+absent. Query errors other than `NotFound` stop the check. The Dex check proves
+that the retained plaintext and bcrypt hash form a pair without printing either
+one:
+
+```bash
+(
+  set -euo pipefail
+  source scripts/load-deployment-env.sh
+  command -v helm kubectl oras python3 openssl base64 sha256sum tar
+  command -v htpasswd
+  command -v envsubst
+  source "$PRE_ROOT/scripts/lib/config.sh"
+  missing=()
+  for name in \
+    BASE_DOMAIN STORAGE_CLASS POD_CIDR SERVICE_CIDR \
+    PG_CLUSTER_NAME PG_DB_NAME PG_DB_USER \
+    DEX_STATIC_EMAIL DEX_STATIC_PASSWORD DEX_STATIC_PASSWORD_HASH \
+    SSO_MODE SSO_NS_BASE_URL
+  do
+    [[ -n "${!name:-}" ]] || missing+=("$name")
+  done
+
+  resource_exists() {
+    local kind="$1" name="$2" output
+    if output="$(kubectl get "$kind" "$name" -n nereidforge -o name 2>&1)"; then
+      return 0
+    fi
+    if [[ "$output" == *"NotFound"* || "$output" == *"not found"* ]]; then
+      return 1
+    fi
+    printf 'Could not query %s/%s in nereidforge\n' "$kind" "$name" >&2
+    return 2
+  }
+
+  if resource_exists secret "pg-${PG_CLUSTER_NAME}-credentials"; then
+    :
+  else
+    status=$?
+    (( status == 1 )) || exit "$status"
+    missing+=(PG_ADMIN_PASSWORD)
+  fi
+
+  S3_CREDENTIALS_EXIST=false
+  for resource in \
+    secret:seaweedfs-s3-credentials \
+    secret:seaweedfs-s3-config \
+    configmap:seaweedfs-s3-config
+  do
+    IFS=: read -r kind name <<< "$resource"
+    if resource_exists "$kind" "$name"; then
+      S3_CREDENTIALS_EXIST=true
+      break
+    else
+      status=$?
+      (( status == 1 )) || exit "$status"
+    fi
+  done
+  if [[ "$S3_CREDENTIALS_EXIST" == false ]]; then
+    for name in SEAWEEDFS_S3_ACCESS_KEY SEAWEEDFS_S3_SECRET_KEY; do
+      [[ -n "${!name:-}" ]] || missing+=("$name")
+    done
+  fi
+  if (( ${#missing[@]} )); then
+    printf 'Missing required pre input: %s\n' "${missing[@]}" >&2
+    exit 1
+  fi
+  test "$DEX_STATIC_EMAIL" = admin@nereidforge.local
+  test "$SSO_MODE" = ns
+  kubectl get storageclass "$STORAGE_CLASS" >/dev/null
+
+  PY=python3
+  if [[ -x "$PRE_ROOT/.venv/bin/python" ]] &&
+     "$PRE_ROOT/.venv/bin/python" -c 'import boto3' >/dev/null 2>&1; then
+    PY="$PRE_ROOT/.venv/bin/python"
+  fi
+  "$PY" -c 'import boto3'
+
+  DEX_HASH_FILE="$(mktemp)"
+  chmod 600 "$DEX_HASH_FILE"
+  trap 'rm -f "$DEX_HASH_FILE"' EXIT
+  printf 'dex:%s\n' "$DEX_STATIC_PASSWORD_HASH" > "$DEX_HASH_FILE"
+  if printf '%s\n' "$DEX_STATIC_PASSWORD" |
+    htpasswd -iv "$DEX_HASH_FILE" dex >/dev/null 2>&1
+  then
+    echo 'Password for user dex correct'
+  else
+    echo 'DEX_CREDENTIALS=MISMATCH' >&2
+    exit 1
+  fi
+  echo 'PRE_PREFLIGHT=PASS'
+)
+```
+
+If `boto3` is missing, install it into the interpreter selected above, or use
+`python3 -m venv "$PRE_ROOT/.venv"` and
+`"$PRE_ROOT/.venv/bin/pip" install boto3`. Do not bypass a failed preflight.
 
 Run every stage manually and stop on the first failure:
 
@@ -582,6 +914,27 @@ bash "$PRE_ROOT/scripts/30_install-kubeflow.sh"
 bash "$PRE_ROOT/scripts/60_verify/infra-check.sh"
 bash "$PRE_ROOT/scripts/60_verify/kubeflow-check.sh"
 bash "$PRE_ROOT/scripts/60_verify/mr-check.sh"
+```
+
+The Kubeflow stage must finish with all 18 targets applied. It renders each
+target once and makes up to four apply attempts, 15 seconds apart by default,
+because CRDs and admission webhooks can reject resources while their controllers
+are still starting. If those bounded retries are exhausted, do not delete
+namespaces or rerun infrastructure. Inspect the
+Knative, Kubeflow, KServe, JobSet, and LWS Pods; wait for
+`deployment/kserve-controller-manager` in `kserve` and confirm that
+`kserve-webhook-server-service` has an endpoint before rerunning only
+`30_install-kubeflow.sh`. Stop for diagnosis on image-pull, crash-loop, or
+persistent webhook failures:
+
+```bash
+kubectl get pods -n knative-serving
+kubectl get pods -n kubeflow
+kubectl get pods -n kserve
+kubectl get pods -A | grep -E 'jobset|leaderworkerset|lws-system'
+kubectl wait --for=condition=Available \
+  deployment/kserve-controller-manager -n kserve --timeout=600s
+kubectl get endpoints -n kserve kserve-webhook-server-service
 ```
 
 The successful Kubeflow stage automatically finalizes the NF handoff. It:
@@ -673,36 +1026,48 @@ CNPG, SeaweedFS, KFP artifact, CA, runtime, and administrator contracts.
 
 ### 7.4 Run preflight and install the three NF application charts
 
-```bash
-NEREIDFORGE_BACKEND_CHART="$(pull_nereid_chart nereidforge-backend "$NEREIDFORGE_VERSION")"
-NEREIDFORGE_FRONTEND_CHART="$(pull_nereid_chart nereidforge-frontend "$NEREIDFORGE_VERSION")"
-NEREIDFORGE_ML_BACKEND_CHART="$(pull_nereid_chart nereidforge-ml-backend "$NEREIDFORGE_VERSION")"
-test -s "$NEREIDFORGE_BACKEND_CHART"
-test -s "$NEREIDFORGE_FRONTEND_CHART"
-test -s "$NEREIDFORGE_ML_BACKEND_CHART"
-NEREIDFORGE_RESOLVED_VERSION="$(helm show chart "$NEREIDFORGE_BACKEND_CHART" | awk '/^version:/ {print $2; exit}')"
-for chart in "$NEREIDFORGE_FRONTEND_CHART" "$NEREIDFORGE_ML_BACKEND_CHART"; do
-  test "$(helm show chart "$chart" | awk '/^version:/ {print $2; exit}')" = \
-    "$NEREIDFORGE_RESOLVED_VERSION"
-done
-printf '%s\n' "$NEREIDFORGE_RESOLVED_VERSION" \
-  > "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
-chmod 600 "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
-bash "$PRE_ROOT/scripts/40_check-nf-handoff.sh"
+Run this as one fail-closed block. It stops at the first failed pull, metadata
+check, preflight, or Helm command instead of continuing with an empty chart
+path. The resolved version is persisted for the later acceptance stage.
 
-helm upgrade --install nereidforge-backend "$NEREIDFORGE_BACKEND_CHART" \
-  --namespace nereidforge \
-  -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
-  --wait --timeout 10m
-helm upgrade --install nereidforge-frontend "$NEREIDFORGE_FRONTEND_CHART" \
-  --namespace nereidforge \
-  -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
-  --wait --timeout 10m
-helm upgrade --install ml-backend "$NEREIDFORGE_ML_BACKEND_CHART" \
-  --namespace nereidforge \
-  -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
-  --wait --timeout 10m
+```bash
+(
+  set -euo pipefail
+  NEREIDFORGE_BACKEND_CHART="$(pull_nereid_chart nereidforge-backend "$NEREIDFORGE_VERSION")"
+  NEREIDFORGE_FRONTEND_CHART="$(pull_nereid_chart nereidforge-frontend "$NEREIDFORGE_VERSION")"
+  NEREIDFORGE_ML_BACKEND_CHART="$(pull_nereid_chart nereidforge-ml-backend "$NEREIDFORGE_VERSION")"
+  test -s "$NEREIDFORGE_BACKEND_CHART"
+  test -s "$NEREIDFORGE_FRONTEND_CHART"
+  test -s "$NEREIDFORGE_ML_BACKEND_CHART"
+  NEREIDFORGE_RESOLVED_VERSION="$(helm show chart "$NEREIDFORGE_BACKEND_CHART" | awk '/^version:/ {print $2; exit}')"
+  for chart in "$NEREIDFORGE_FRONTEND_CHART" "$NEREIDFORGE_ML_BACKEND_CHART"; do
+    test "$(helm show chart "$chart" | awk '/^version:/ {print $2; exit}')" = \
+      "$NEREIDFORGE_RESOLVED_VERSION"
+  done
+  printf '%s\n' "$NEREIDFORGE_RESOLVED_VERSION" \
+    > "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
+  chmod 600 "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
+  bash "$PRE_ROOT/scripts/40_check-nf-handoff.sh"
+
+  helm upgrade --install nereidforge-backend "$NEREIDFORGE_BACKEND_CHART" \
+    --namespace nereidforge \
+    -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
+    --wait --timeout 10m
+  helm upgrade --install nereidforge-frontend "$NEREIDFORGE_FRONTEND_CHART" \
+    --namespace nereidforge \
+    -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
+    --wait --timeout 10m
+  helm upgrade --install ml-backend "$NEREIDFORGE_ML_BACKEND_CHART" \
+    --namespace nereidforge \
+    -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
+    --wait --timeout 10m
+)
 ```
+
+An anonymous `denied` response means that the selected chart is not publicly
+available at that version. Do not authenticate to bypass the anonymous gate or
+continue with an empty archive variable; return to §7.1 and complete the NF
+artifact gate instead.
 
 Do not add `--create-namespace`; pre owns that namespace and the handoff
 prevents Helm from adopting it. The backend post-install/post-upgrade hooks
@@ -715,6 +1080,7 @@ not continue to frontend or ML backend after a backend failure.
 Confirm rollouts and archive the running image evidence:
 
 ```bash
+NEREIDFORGE_RESOLVED_VERSION="$(cat "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt")"
 kubectl -n nereidforge rollout status deploy/nereidforge-api --timeout=5m
 kubectl -n nereidforge rollout status deploy/nereidforge-worker --timeout=5m
 kubectl -n nereidforge rollout status deploy/nereidforge-frontend --timeout=5m

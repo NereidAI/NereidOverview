@@ -123,20 +123,25 @@ fails, or health and SSO checks do not pass.
 
 ## 5. NereidForge
 
-**Empty-cluster stop point:** complete §§1–4 and stop here whenever the
-following development artifact gate remains unsatisfied.
+**Independent stop points:** pre-only installation and NF application
+installation have separate artifact requirements.
 
-- [ ] **Artifact gate:** use `PRE_VERSION=0.0.0-dev` and
-      `NEREIDFORGE_VERSION=0.0.0-dev` from the persistent operator environment.
-      Confirm the pre installer plus five supporting charts and all 23 NF-owned
-      images plus four NF charts passed their anonymous publication gates.
-      Record each independently resolved `0.0.0-dev-<short-sha>` version, OCI
-      digest, and source commit. **Stop here if that evidence is absent.**
-- [ ] With the artifact gate satisfied, follow the
-      [suite installation guide §7](../install-suite.md#71-development-artifact-gate).
-      Confirm its ordered infrastructure, Kubeflow, three application charts,
-      and verification stages individually; this checklist does not replace that
-      procedure. `nereidforge-tenant-check` remains verification-only.
+- [ ] **Pre artifact gate:** use `PRE_VERSION=0.0.0-dev` from the persistent
+      operator environment. Confirm the pre installer plus five supporting
+      charts passed anonymous publication verification, and record the resolved
+      `0.0.0-dev-<short-sha>` version, OCI digest, and source commit. This alone
+      permits §7.2.
+- [ ] Follow the [suite installation guide §7](../install-suite.md#71-development-artifact-gate)
+      through its ordered infrastructure, Kubeflow, and pre verification stages.
+- [ ] **NF artifact gate:** before §§7.3–7.5, use
+      `NEREIDFORGE_VERSION=0.0.0-dev` and confirm the selected `publish-dev`
+      profile passed anonymous verification: 23 images for `full`, or 18
+      core/CPU/Intel-XPU images for `cpu-xpu`, plus exactly four NF charts.
+      Record the profile, independent resolved version, digests, and source
+      commit. **Stop after pre acceptance if that evidence is absent.** Then
+      confirm the three
+      application charts and verification stages individually;
+      `nereidforge-tenant-check` remains verification-only.
 - [ ] Supply the Forge domains, storage settings, strong PostgreSQL/JWT/Dex
       secrets, service-integration tokens, the Identity `nereidforge` client
       secret when used, and an NS ticket secret exactly matching Sphere's

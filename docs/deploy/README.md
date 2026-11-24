@@ -8,10 +8,12 @@ suite documentation.
 > **Availability gate:** Identity, Sphere, Horizon, and Link have verified
 > floating `0.0.0-dev` development artifacts; see the
 > [dated evidence snapshot](reference/development-artifacts-2026-11-22.md) for
-> their resolved versions and digests. Forge uses the gated development
-> procedure in §7: the complete pre and NF artifact sets must pass anonymous
-> verification before installation. Stop after Horizon whenever that evidence is
-> absent. Never install Link without accepted Forge and healthy Forge SeaweedFS.
+> their resolved versions and digests. Forge uses independent development gates
+> in §7: the verified pre installer and five supporting charts permit pre-only
+> §7.2, while the selected NF profile (23 `full` images or 18 `cpu-xpu` images,
+> including Intel XPU) and four NF charts are additionally required for NF
+> §§7.3–7.5. Stop between those stages whenever the NF evidence is absent.
+> Never install Link without accepted Forge and healthy Forge SeaweedFS.
 
 ```mermaid
 flowchart LR
