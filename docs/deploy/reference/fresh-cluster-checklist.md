@@ -123,17 +123,20 @@ fails, or health and SSO checks do not pass.
 
 ## 5. NereidForge
 
-**Current empty-cluster stop point:** complete §§1–4 and stop here while the
-following artifact gate remains unsatisfied.
+**Empty-cluster stop point:** complete §§1–4 and stop here whenever the
+following development artifact gate remains unsatisfied.
 
-- [ ] **Artifact gate:** record a complete Forge installation source and exact
-      version only after public retrieval and integrity verification. This
-      checklist supplies no Forge OCI or Release URL and does not assert that a
-      formal Forge artifact is available. **Stop here if that evidence is absent.**
-- [ ] With the artifact gate satisfied, use the selected Forge release's own
-      verified installation procedure. Confirm its ordered infrastructure,
-      Kubeflow, application, and verification stages individually; this
-      checklist does not replace that procedure.
+- [ ] **Artifact gate:** use `PRE_VERSION=0.0.0-dev` and
+      `NEREIDFORGE_VERSION=0.0.0-dev` from the persistent operator environment.
+      Confirm the pre installer plus five supporting charts and all 23 NF-owned
+      images plus four NF charts passed their anonymous publication gates.
+      Record each independently resolved `0.0.0-dev-<short-sha>` version, OCI
+      digest, and source commit. **Stop here if that evidence is absent.**
+- [ ] With the artifact gate satisfied, follow the
+      [suite installation guide §7](../install-suite.md#71-development-artifact-gate).
+      Confirm its ordered infrastructure, Kubeflow, three application charts,
+      and verification stages individually; this checklist does not replace that
+      procedure. `nereidforge-tenant-check` remains verification-only.
 - [ ] Supply the Forge domains, storage settings, strong PostgreSQL/JWT/Dex
       secrets, service-integration tokens, the Identity `nereidforge` client
       secret when used, and an NS ticket secret exactly matching Sphere's
