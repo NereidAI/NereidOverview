@@ -165,6 +165,21 @@ SUITE_STAGES=(
     pre-artifact pre-infra pre-kubeflow pre-verify
     forge forge-acceptance link
 )
+declare -A SUITE_STAGE_DESCRIPTIONS=(
+    [prerequisites]="Prepare cluster dependencies, storage, hardware plugins, and retained suite Secrets"
+    [identity]="Install NereidIdentity and verify database, Keycloak, and OIDC readiness"
+    [sphere]="Install NereidSphere and verify rollout and readiness"
+    [sphere-acceptance]="Confirm the browser Sphere-to-Identity login and ticket flow"
+    [horizon]="Install NereidHorizon and verify backend and frontend health"
+    [horizon-acceptance]="Confirm the Horizon first-run browser setup"
+    [pre-artifact]="Retrieve and verify the frozen Pre-NereidForge installer and private inputs"
+    [pre-infra]="Install and verify only the Pre-NereidForge infrastructure"
+    [pre-kubeflow]="Install and verify only the Kubeflow layer"
+    [pre-verify]="Verify infrastructure, Kubeflow, Model Registry, and the NF handoff"
+    [forge]="Install the frozen selected-profile NF charts and verify application rollouts"
+    [forge-acceptance]="Run exact-commit NF business verification and retain the Link handoff"
+    [link]="Install NereidLink and verify migration, storage, MQTT, and application health"
+)
 declare -A SUITE_STAGE_INPUTS=(
     [prerequisites]="NFS_SERVER NFS_EXPORT STORAGE_CLASS LOCAL_STORAGE_CLASS INGRESS_CLASS HARDWARE_PLUGINS"
     [identity]="NEREIDIDENTITY_VERSION BASE_DOMAIN STORAGE_CLASS INGRESS_CLASS SUITE_ADMIN_USERNAME SUITE_ADMIN_EMAIL SUITE_ADMIN_FIRST_NAME SUITE_ADMIN_LAST_NAME"
@@ -1474,6 +1489,7 @@ run_installation() {
     suite_acquire_lock "$QUICK_INSTALL_DIR/install.lock"
     prepare_private_kubeconfig
     preflight_cluster
+    printf 'Central suite progress counts completed stages, not elapsed time. Detailed output remains in private logs; the console shows filtered non-secret activity.\n'
     SUITE_PREVIOUS_FINGERPRINT=""
     suite_run_stage prerequisites install_prerequisites verify_prerequisites ${SUITE_STAGE_INPUTS[prerequisites]}
     suite_run_stage identity install_identity verify_identity ${SUITE_STAGE_INPUTS[identity]}

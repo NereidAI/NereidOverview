@@ -33,6 +33,8 @@ set -euo pipefail
 source {shlex.quote(str(RUNNER))}
 SUITE_STATE_DIR={shlex.quote(str(self.state))}
 SUITE_LOG_DIR={shlex.quote(str(self.logs))}
+SUITE_STAGES=(one two)
+declare -A SUITE_STAGE_DESCRIPTIONS=([one]="First test stage" [two]="Second test stage")
 CALLS={shlex.quote(str(self.calls))}
 mkdir -p "$SUITE_STATE_DIR/stages" "$SUITE_LOG_DIR"
 {body}
@@ -54,6 +56,52 @@ verify_one() { record verify-one; }
 install_two() { record install-two; }
 verify_two() { record verify-two; }
 """
+
+    def test_stage_progress_and_operation_details_are_visible(self):
+        result = self.run_bash(
+            self.functions()
+            + """
+suite_run_stage one install_one verify_one NFS_SERVER
+"""
+        )
+        output = result.stdout + result.stderr
+        self.assertIn("Suite progress: 0/2 stages complete (0%)", output)
+        self.assertIn("Stage 1/2: one", output)
+        self.assertIn("Purpose: First test stage", output)
+        self.assertIn("Step 1/2: stage action", output)
+        self.assertIn("Step 2/2: live verification", output)
+        self.assertIn("Stage complete: one", output)
+        self.assertIn("Suite progress: 1/2 stages complete (50%)", output)
+        self.assertIn("Private log:", output)
+
+    def test_failure_summary_is_useful_without_leaking_log_secrets(self):
+        result = self.run_bash(
+            self.functions()
+            + """
+install_one() {
+  printf '\\033[0;34m[INFO]\\033[0m Check API...\\n'
+  printf 'DIAG_HTTP_CODE=200\\n'
+  printf 'DIAG_REMOTE_RESULT=1\\n'
+  printf '[INFO] password=do-not-print-password\\n'
+  printf 'raw-token=do-not-print-token\\n'
+  return 1
+}
+suite_run_stage one install_one verify_one NFS_SERVER
+"""
+            , expected=1
+        )
+        output = result.stdout + result.stderr
+        self.assertIn("Recent non-secret activity (one):", output)
+        self.assertIn("[INFO] Check API...", output)
+        self.assertIn("DIAG_HTTP_CODE=200", output)
+        self.assertIn("DIAG_REMOTE_RESULT=1", output)
+        self.assertIn("exit 1", output)
+        self.assertIn("rerun the same command", output)
+        self.assertNotIn("do-not-print-password", output)
+        self.assertNotIn("do-not-print-token", output)
+        log = (self.logs / "one.log").read_text()
+        self.assertIn("do-not-print-password", log)
+        self.assertIn("do-not-print-token", log)
 
     def test_failure_stops_downstream_and_completed_stage_skips_mutation(self):
         self.run_bash(
