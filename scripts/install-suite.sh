@@ -131,7 +131,9 @@ SUITE_LOG_DIR="$DEPLOY_LOG_ROOT/quick-install"
 # instead of leaving a setup screen for the first browser visitor.
 LINK_ADMIN_EMAIL="admin@nereidai.local"
 LINK_ADMIN_CREDENTIALS_FILE="$DEPLOY_VALUES_ROOT/nereidlink/admin-credentials.env"
-LINK_LOCAL_HTTP_PORT="${LINK_LOCAL_HTTP_PORT:-18081}"
+# 0 (the default) lets the kernel assign the loopback port, so a busy host
+# port can never break the bootstrap; a positive value pins a fixed port.
+LINK_LOCAL_HTTP_PORT="${LINK_LOCAL_HTTP_PORT:-0}"
 LINK_API_READY_ATTEMPTS="${LINK_API_READY_ATTEMPTS:-20}"
 LINK_API_RETRY_DELAY="${LINK_API_RETRY_DELAY:-2}"
 
@@ -1254,14 +1256,25 @@ if document != canonical:
 PY
 )
 
+# Retain the kubectl port-forward log on failure and point the operator at it.
+# The log carries only forwarding/bind diagnostics, never credentials.
+link_retain_forward_log() {
+    local message="$1"
+    LINK_API_FORWARD_KEPT=yes
+    suite_fail "$message Retained diagnostic: $DEPLOY_LOG_ROOT/nereidlink/api-port-forward.log"
+}
+
 # Establish a loopback-only forward to the Link app Pod and expose
 # LINK_API_BASE/LINK_API_WORK_DIR. This mirrors the product post-deploy flow and
-# keeps the one-time bootstrap call off the public Ingress. Callers run in a
+# keeps the one-time bootstrap call off the public Ingress. The local port is
+# kernel-assigned unless LINK_LOCAL_HTTP_PORT pins one, so another host service
+# cannot block the bootstrap by occupying a fixed port. Callers run in a
 # subshell; the EXIT trap reaps the forward and removes temporary response files.
 link_start_api_forward() {
-    local pod attempt
+    local pod attempt forward_log local_spec chosen_port
     LINK_API_WORK_DIR="$(mktemp -d "$QUICK_INSTALL_DIR/link-api.XXXXXX")"
     chmod 700 "$LINK_API_WORK_DIR"
+    forward_log="$LINK_API_WORK_DIR/port-forward.log"
     pod="$(kubectl -n nereidlink get pod \
         -l app.kubernetes.io/component=app \
         -o jsonpath='{.items[0].metadata.name}')"
@@ -1270,24 +1283,54 @@ link_start_api_forward() {
         suite_fail "no NereidLink application Pod is available for the admin API forward"
         return 1
     fi
-    kubectl -n nereidlink port-forward "pod/$pod" \
-        "127.0.0.1:${LINK_LOCAL_HTTP_PORT}:8080" \
-        >"$LINK_API_WORK_DIR/port-forward.log" 2>&1 &
+    LINK_API_FORWARD_KEPT=""
+    if [[ "$LINK_LOCAL_HTTP_PORT" =~ ^[1-9][0-9]*$ ]]; then
+        local_spec="${LINK_LOCAL_HTTP_PORT}:8080"
+        chosen_port="$LINK_LOCAL_HTTP_PORT"
+    else
+        local_spec=":8080"
+        chosen_port=""
+    fi
+    kubectl -n nereidlink port-forward --address 127.0.0.1 \
+        "pod/$pod" "$local_spec" >"$forward_log" 2>&1 &
     LINK_API_PID=$!
-    LINK_API_BASE="http://127.0.0.1:${LINK_LOCAL_HTTP_PORT}"
-    trap 'kill "$LINK_API_PID" 2>/dev/null || true; rm -rf "$LINK_API_WORK_DIR"' EXIT
+    trap '
+        kill "$LINK_API_PID" 2>/dev/null || true
+        if [[ -n "${LINK_API_FORWARD_KEPT:-}" && -s "$LINK_API_WORK_DIR/port-forward.log" ]]; then
+            cp "$LINK_API_WORK_DIR/port-forward.log" "$DEPLOY_LOG_ROOT/nereidlink/api-port-forward.log"
+            chmod 600 "$DEPLOY_LOG_ROOT/nereidlink/api-port-forward.log"
+        fi
+        rm -rf "$LINK_API_WORK_DIR"
+    ' EXIT
+    if [[ -z "$chosen_port" ]]; then
+        for ((attempt = 1; attempt <= LINK_API_READY_ATTEMPTS; attempt++)); do
+            chosen_port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) -> 8080.*/\1/p' \
+                "$forward_log" | head -n1)"
+            [[ -n "$chosen_port" ]] && break
+            if ! kill -0 "$LINK_API_PID" 2>/dev/null; then
+                link_retain_forward_log "the NereidLink local API forward exited before selecting a port."
+                return 1
+            fi
+            sleep "$LINK_API_RETRY_DELAY"
+        done
+        if [[ -z "$chosen_port" ]]; then
+            link_retain_forward_log "the NereidLink local API forward did not select a local port within the retry budget."
+            return 1
+        fi
+    fi
+    LINK_API_BASE="http://127.0.0.1:${chosen_port}"
     for ((attempt = 1; attempt <= LINK_API_READY_ATTEMPTS; attempt++)); do
         if curl --noproxy '*' --silent --show-error --fail --max-time 5 \
             "$LINK_API_BASE/healthz" >/dev/null 2>&1; then
             return 0
         fi
         if ! kill -0 "$LINK_API_PID" 2>/dev/null; then
-            suite_fail "the NereidLink local API forward exited before becoming ready"
+            link_retain_forward_log "the NereidLink local API forward exited before becoming ready."
             return 1
         fi
         sleep "$LINK_API_RETRY_DELAY"
     done
-    suite_fail "NereidLink API did not become reachable on the local forward within the retry budget"
+    link_retain_forward_log "NereidLink API did not become reachable on the local forward within the retry budget."
     return 1
 }
 

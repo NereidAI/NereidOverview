@@ -1296,20 +1296,32 @@ LINK_STATE_DIR="$DEPLOY_VALUES_ROOT/nereidlink"
 LINK_CREDENTIALS="$LINK_STATE_DIR/admin-credentials.env"
 APP_POD="$(kubectl -n nereidlink get pod -l app.kubernetes.io/component=app \
   -o jsonpath='{.items[0].metadata.name}')"
-kubectl -n nereidlink port-forward "pod/$APP_POD" 127.0.0.1:18081:8080 &
+# Omitting the local port lets the kernel assign one, so another host service
+# (for example a developer process already bound to 18081) cannot break the
+# flow. Pin one only with an explicit PORT:8080 spec when required.
+kubectl -n nereidlink port-forward --address 127.0.0.1 "pod/$APP_POD" :8080 \
+  >/tmp/nereidlink-port-forward.log 2>&1 &
 PF_PID=$!
 trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
-sleep 3
-STATUS="$(curl --noproxy '*' -fsS http://127.0.0.1:18081/v1/auth/bootstrap-status)"
+PF_PORT=""
+for _ in $(seq 1 20); do
+  PF_PORT="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) -> 8080.*/\1/p' \
+    /tmp/nereidlink-port-forward.log | head -n1)"
+  [[ -n "$PF_PORT" ]] && break
+  kill -0 "$PF_PID" 2>/dev/null || { cat /tmp/nereidlink-port-forward.log; exit 1; }
+  sleep 1
+done
+[[ -n "$PF_PORT" ]] || { cat /tmp/nereidlink-port-forward.log; exit 1; }
+STATUS="$(curl --noproxy '*' -fsS "http://127.0.0.1:$PF_PORT/v1/auth/bootstrap-status")"
 if grep -q '"required":true' <<<"$STATUS"; then
   ADMIN_PASSWORD="$(openssl rand -hex 24)"
   printf '{"password":"%s"}' "$ADMIN_PASSWORD" \
     | curl --noproxy '*' -fsS -X POST \
-      http://127.0.0.1:18081/v1/auth/bootstrap \
+      "http://127.0.0.1:$PF_PORT/v1/auth/bootstrap" \
       -H 'Content-Type: application/json' --data-binary @- \
       -o /tmp/nereidlink-bootstrap-response.json
   grep -q '"access_token"' /tmp/nereidlink-bootstrap-response.json
-  rm -f /tmp/nereidlink-bootstrap-response.json
+  rm -f /tmp/nereidlink-bootstrap-response.json /tmp/nereidlink-port-forward.log
   umask 077
   printf '%s\n' \
     '# NereidLink built-in platform admin; save securely and never commit.' \
@@ -1317,6 +1329,7 @@ if grep -q '"required":true' <<<"$STATUS"; then
     "LINK_ADMIN_PASSWORD=$ADMIN_PASSWORD" > "$LINK_CREDENTIALS"
   chmod 600 "$LINK_CREDENTIALS"
 else
+  rm -f /tmp/nereidlink-port-forward.log
   echo 'Link admin is already initialized; existing password left unchanged'
 fi
 ```
