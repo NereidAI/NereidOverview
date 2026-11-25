@@ -322,13 +322,33 @@ def chart_blob(product, version):
     return archive, digest
 
 
+def chart_digest_map():
+    # Remembers the tag resolved for each manifest digest so a digest-addressed
+    # manifest fetch can rebuild the chart with the selector's own version.
+    path = STATE_PATH.parent / "chart-digest-map.json"
+    if path.exists():
+        return path, json.loads(path.read_text(encoding="utf-8"))
+    return path, {}
+
+
 def run_oras(args):
     state = load_state()
     command = args[0]
     if command == "resolve":
         repository = args[-1]
-        version = state["pre_version"] if "pre-nereidforge-installer" in repository else state["chart_version"]
+        if "pre-nereidforge-installer" in repository:
+            version = state["pre_version"]
+        else:
+            tag = repository.rsplit(":", 1)[1] if ":" in repository.rsplit("/", 1)[-1] else state["chart_version"]
+            # The floating 0.0.0-dev tag points at the registry's immutable
+            # chart; every other selector is taken verbatim.
+            version = state["chart_version"] if tag == "0.0.0-dev" else tag
         digest = hashlib.sha256(f"{repository}:{version}".encode()).hexdigest()
+        if "pre-nereidforge-installer" not in repository:
+            map_path, digest_map = chart_digest_map()
+            product = repository.split("/", 1)[1].split(":", 1)[0].removeprefix("nereidai/charts/")
+            digest_map[digest] = {"product": product, "version": version}
+            map_path.write_text(json.dumps(digest_map), encoding="utf-8")
         print(f"sha256:{digest}")
         return 0
     if command == "manifest" and args[1] == "fetch":
@@ -344,7 +364,9 @@ def run_oras(args):
             }))
         else:
             product = reference.split("/", 1)[1].split("@", 1)[0].removeprefix("nereidai/charts/")
-            version = state["chart_version"]
+            digest = reference.rsplit("@", 1)[-1].removeprefix("sha256:")
+            _, digest_map = chart_digest_map()
+            version = digest_map.get(digest, {}).get("version", state["chart_version"])
             _, layer_digest = chart_blob(product, version)
             print(json.dumps({
                 "layers": [{

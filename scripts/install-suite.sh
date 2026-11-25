@@ -10,6 +10,22 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/lib/suite-versions.sh
+source "$SCRIPT_DIR/lib/suite-versions.sh"
+# Product chart selectors default from the suite version matrix. A checkout
+# exactly on a v* tag resolves to that release's pinned matrix; every other
+# checkout uses the rolling dev channel. Explicit deployment.env values still
+# take precedence because they are applied below as unset-only defaults.
+SUITE_VERSION_CHANNEL="$(suite_resolve_version_channel "$REPO_ROOT")"
+SUITE_VERSIONS_MANIFEST="$REPO_ROOT/deploy/suite-versions.yaml"
+SUITE_VERSION_ASSIGNMENTS="$(python3 "$SCRIPT_DIR/lib/suite_versions.py" \
+    --manifest "$SUITE_VERSIONS_MANIFEST" \
+    --channel "$SUITE_VERSION_CHANNEL")" || {
+    echo "FATAL: cannot resolve the suite version matrix for channel $SUITE_VERSION_CHANNEL" >&2
+    exit 2
+}
+eval "$SUITE_VERSION_ASSIGNMENTS"
+unset SUITE_VERSION_ASSIGNMENTS
 COMMAND=run
 CONFIG_PATH=""
 
@@ -75,12 +91,12 @@ export DEPLOYMENT_ENV_FILE="$CONFIG_PATH"
 : "${DEPLOYMENT_ROOT:=$HOME/.nereidai-deployment}"
 : "${DEPLOY_VALUES_ROOT:=$DEPLOYMENT_ROOT/deploy-values}"
 : "${DEPLOY_LOG_ROOT:=$DEPLOYMENT_ROOT/deploy-logs}"
-: "${NEREIDIDENTITY_VERSION:=0.0.0-dev}"
-: "${NEREIDSPHERE_VERSION:=0.0.0-dev}"
-: "${NEREIDHORIZON_VERSION:=0.0.0-dev}"
-: "${PRE_VERSION:=0.0.0-dev}"
-: "${NEREIDFORGE_VERSION:=0.0.0-dev}"
-: "${NEREIDLINK_VERSION:=0.0.0-dev}"
+: "${NEREIDIDENTITY_VERSION:=$SUITE_DEFAULT_NEREIDIDENTITY_VERSION}"
+: "${NEREIDSPHERE_VERSION:=$SUITE_DEFAULT_NEREIDSPHERE_VERSION}"
+: "${NEREIDHORIZON_VERSION:=$SUITE_DEFAULT_NEREIDHORIZON_VERSION}"
+: "${PRE_VERSION:=$SUITE_DEFAULT_PRE_VERSION}"
+: "${NEREIDFORGE_VERSION:=$SUITE_DEFAULT_NEREIDFORGE_VERSION}"
+: "${NEREIDLINK_VERSION:=$SUITE_DEFAULT_NEREIDLINK_VERSION}"
 : "${STORAGE_CLASS:=nfs-csi}"
 : "${LOCAL_STORAGE_CLASS:=local-path}"
 : "${INGRESS_CLASS:=traefik}"

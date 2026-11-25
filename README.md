@@ -59,6 +59,12 @@ image digests as deployment evidence. Use the resolved short-SHA snapshot only
 for deliberate reproduction. Formal deployments must select a published,
 anonymously verified bare-SemVer version instead.
 
+The quick installer's per-channel defaults live in the single version matrix
+[`deploy/suite-versions.yaml`](deploy/suite-versions.yaml): a non-tag checkout
+resolves every product to the development channel, while a checkout exactly on
+a suite `v*` tag resolves to the release matrix pinned in that tag. See
+[Suite versioning and release tags](docs/deploy/quick-install.md#3-suite-versioning-and-release-tags).
+
 > **Full-suite boundary:** Forge uses independently gated development stages,
 > not a formal-release prerequisite. The verified pre installer and five
 > supporting charts are sufficient to start pre-only §7.2. The selected NF

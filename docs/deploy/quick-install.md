@@ -214,7 +214,51 @@ Edit only the waiting stage's attestation, rerun the same command, and leave
 completed stages unchanged. Do not set every attestation preemptively merely to
 make the command unattended.
 
-## 3. Local credential file inventory
+## 3. Suite versioning and release tags
+
+Product chart selectors default from one version matrix,
+`deploy/suite-versions.yaml`; no product version is hardcoded in the
+installer. The installer resolves its channel from this NereidOverview
+checkout with the same rule as the product repositories:
+
+- a checkout that is **not** exactly on a `v*` tag (main, feature branches,
+  detached work, or a tarball without `.git`) uses the `channels.dev` matrix,
+  where every product tracks the rolling `0.0.0-dev` chart;
+- a checkout **exactly on a SemVer tag** such as `v0.0.1` uses the
+  `releases.0.0.1` matrix, which pins every product to the versions validated
+  together for that suite release.
+
+`scripts/install-suite.sh status` prints the active channel or release. The
+first pull of each selector is still frozen by the per-product artifact lock
+and digest evidence, so a floating `0.0.0-dev` default cannot move under an
+already-prepared deployment root, and the stage fingerprints treat version
+changes as explicit configuration changes.
+
+An explicit selector in `deployment.env` (for example
+`NEREIDLINK_VERSION=0.0.1`) overrides the matrix default for that product and
+remains the supported escape hatch for a reviewed exception. The chart pull
+path accepts both development selectors (`0.0.0-dev`, `0.0.0-dev-<sha7>`) and
+bare SemVer release selectors; anything else fails closed.
+
+### Cutting a suite release
+
+1. Confirm each product's release tag has published its OCI chart with the
+   intended bare SemVer version.
+2. Add the validated combination to `releases:` in
+   `deploy/suite-versions.yaml`, keyed by the bare suite version, and merge it
+   to `main`.
+3. Tag that commit `vX.Y.Z` and push the tag. The tag-triggered
+   `.github/workflows/release.yml` gate resolves the matrix through
+   `scripts/lib/suite_versions.py` and fails the release when the entry is
+   missing, incomplete, or contains an invalid selector.
+
+Known limitation: the NF verifier and the pre-NereidForge installer still
+accept development selectors only. Until those consumers support release
+versions, a tagged suite matrix cannot run the NF stages end to end on release
+selectors; the tag gate validates matrix shape regardless, and development
+deployments from `main` are unaffected.
+
+## 4. Local credential file inventory
 
 The following inventory covers the current quick-install wrapper and its
 referenced pre installer and NF verifier. These are files on the operator host,
@@ -313,7 +357,7 @@ recovery. Generated values, patches, and extracted chart copies remain
 sensitive even when they can be reproduced. Never commit or upload any
 credential-bearing file listed in this section.
 
-## 4. Artifact and Secret behavior on rerun
+## 5. Artifact and Secret behavior on rerun
 
 The first anonymous chart/pre resolution atomically records its OCI digest
 intent before downloading bytes. Retrieval then uses that digest, verifies the
@@ -358,7 +402,7 @@ shell tracing and do not upload deployment roots, generated values, private
 logs, credential handoffs, private kubeconfigs, or Secret stores to an issue or
 public artifact.
 
-## 5. Finish acceptance separately
+## 6. Finish acceptance separately
 
 A successful final stage means the central Link installation passed its
 programmatic gates, including completion of the one-time platform administrator

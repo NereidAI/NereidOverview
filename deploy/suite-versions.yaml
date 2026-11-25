@@ -1,0 +1,27 @@
+# Copyright (C) 2026 YIQISOFT
+# SPDX-License-Identifier: Apache-2.0
+#
+# Suite release version matrix — the single source of truth for the product
+# chart selectors used by scripts/install-suite.sh. Two channels exist:
+#
+#   dev:      every product tracks its rolling 0.0.0-dev chart. Any checkout
+#             that is not exactly on a v* tag (main, feature branches, detached
+#             work) resolves to this channel.
+#   releases: one entry per suite release tag, keyed by the bare SemVer tag
+#             (v0.0.1 -> "0.0.1"), pinning every product to the versions that
+#             were validated together. Cutting a suite tag requires adding its
+#             matrix here first; the tag-triggered release workflow fails the
+#             release when the entry is missing.
+#
+# An operator-supplied deployment.env still overrides any individual selector;
+# the matrix only provides the per-channel defaults.
+schemaVersion: 1
+channels:
+  dev:
+    nereididentity: 0.0.0-dev
+    nereidsphere: 0.0.0-dev
+    nereidhorizon: 0.0.0-dev
+    pre: 0.0.0-dev
+    nereidforge: 0.0.0-dev
+    nereidlink: 0.0.0-dev
+releases: {}
