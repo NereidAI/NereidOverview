@@ -509,7 +509,7 @@ verify_hardware() (
     [[ -n "$HARDWARE_PLUGINS" ]] || return 0
     local nodes
     nodes="$(mktemp "$QUICK_INSTALL_DIR/nodes.XXXXXX.json")"
-    trap 'rm -f "$nodes"' EXIT
+    trap 'rm -f -- '"$(printf '%q' "$nodes")" EXIT
     kubectl get nodes -o json > "$nodes"
     python3 - "$nodes" "$HARDWARE_PLUGINS" <<'PY'
 import json
@@ -988,7 +988,8 @@ def retain_file(filename, key, live, generated=None):
     return value
 
 runtime = live_secret("nereidforge-service-credentials")
-if runtime and runtime.get("NEREIDFORGE_SSO_NS_CLIENT_SECRET", "") != expected_sso:
+runtime_sso = (runtime or {}).get("NEREIDFORGE_SSO_NS_CLIENT_SECRET", "")
+if runtime_sso and runtime_sso != expected_sso:
     raise SystemExit("Forge runtime SSO identity differs from Sphere; stop for recovery")
 sso = retain_file("sso-client", "NEREIDFORGE_SSO_NS_CLIENT_SECRET", runtime, expected_sso)
 if sso != expected_sso:
@@ -1222,7 +1223,7 @@ verify_link_storage() (
     deployment="$(mktemp "$QUICK_INSTALL_DIR/link-deployment.XXXXXX.json")"
     replicasets="$(mktemp "$QUICK_INSTALL_DIR/link-replicasets.XXXXXX.json")"
     pods="$(mktemp "$QUICK_INSTALL_DIR/link-pods.XXXXXX.json")"
-    trap 'rm -f "$deployment" "$replicasets" "$pods"' EXIT
+    trap 'rm -f -- '"$(printf '%q' "$deployment")"' '"$(printf '%q' "$replicasets")"' '"$(printf '%q' "$pods")" EXIT
     kubectl -n nereidlink get deployment nereidlink -o json > "$deployment"
     kubectl -n nereidlink get replicasets -o json > "$replicasets"
     kubectl -n nereidlink get pods -o json > "$pods"

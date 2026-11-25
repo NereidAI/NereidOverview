@@ -30,7 +30,7 @@ _nereid_atomic_write() (
     set -euo pipefail
     local destination="$1" content="$2" temporary
     temporary="$(mktemp "${destination}.tmp.XXXXXX")"
-    trap 'rm -f "$temporary"' EXIT
+    trap 'rm -f -- '"$(printf '%q' "$temporary")" EXIT
     printf '%s\n' "$content" > "$temporary"
     chmod 600 "$temporary"
     mv -f "$temporary" "$destination"
@@ -75,7 +75,7 @@ _nereid_resolve_digest() (
             return 1
         fi
         temporary="$(mktemp "${intent}.resolve.XXXXXX")"
-        trap 'rm -f "$temporary"' EXIT
+        trap 'rm -f -- '"$(printf '%q' "$temporary")" EXIT
         oras resolve --registry-config "$oras_config" "${repository}:${selector}" > "$temporary"
         local -a resolved
         mapfile -t resolved < "$temporary"
@@ -157,7 +157,7 @@ pull_nereid_chart() (
     }
     install -d -m 700 "$DEPLOY_LOG_ROOT/$product" "$DEPLOYMENT_ROOT/chart-archives"
     anonymous_dir="$(mktemp -d "$DEPLOYMENT_ROOT/anonymous-registry.XXXXXX")"
-    trap 'rm -rf "$anonymous_dir"' EXIT
+    trap 'rm -rf -- '"$(printf '%q' "$anonymous_dir")" EXIT
     oras_config="$anonymous_dir/oras.json"
     export HELM_REGISTRY_CONFIG="$anonymous_dir/helm.json"
     repository="ghcr.io/nereidai/charts/${product}"
@@ -305,7 +305,7 @@ pull_pre_nereidforge_installer() (
     install -d -m 700 "$PRE_HANDOFF_DIR" "$PRE_RELEASE_DIR" \
         "$PRE_RELEASE_DIR/artifacts" "$DEPLOY_LOG_ROOT/nereidforge"
     anonymous_dir="$(mktemp -d "$DEPLOYMENT_ROOT/anonymous-registry.XXXXXX")"
-    trap 'rm -rf "$anonymous_dir"' EXIT
+    trap 'rm -rf -- '"$(printf '%q' "$anonymous_dir")" EXIT
     oras_config="$anonymous_dir/oras.json"
     repository="ghcr.io/nereidai/pre-nereidforge-installer"
     intent="$PRE_RELEASE_DIR/installer-digest-intent.txt"
@@ -447,7 +447,7 @@ record_nereid_images() (
     umask 077
     local product="$1" pod_json
     pod_json="$(mktemp "$DEPLOY_LOG_ROOT/$product/pods.XXXXXX.json")"
-    trap 'rm -f "$pod_json"' EXIT
+    trap 'rm -f -- '"$(printf '%q' "$pod_json")" EXIT
     kubectl -n "$product" get pods -o json > "$pod_json"
     python3 - "$pod_json" <<'PY' | tee "$DEPLOY_LOG_ROOT/$product/image-digests.txt"
 import json

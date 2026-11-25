@@ -231,10 +231,13 @@ path = Path(sys.argv[1])
 state = json.loads(path.read_text(encoding="utf-8"))
 store = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 runtime = state["secrets"].setdefault("nereidforge/nereidforge-service-credentials", {})
-runtime.setdefault(
-    "NEREIDFORGE_SSO_NS_CLIENT_SECRET",
-    store["secrets"]["sphere.ticket.forge"],
-)
+runtime.setdefault("NEREIDFORGE_LABELSTUDIO_TOKEN", "fake-pre-labelstudio-token")
+runtime.setdefault("NEREIDFORGE_CVAT_TOKEN", "fake-pre-cvat-token")
+if os.environ.get("FAKE_PRE_RUNTIME_WITHOUT_NF_SSO") != "yes":
+    runtime.setdefault(
+        "NEREIDFORGE_SSO_NS_CLIENT_SECRET",
+        os.environ.get("FAKE_PRE_RUNTIME_SSO_OVERRIDE", store["secrets"]["sphere.ticket.forge"]),
+    )
 temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
 temporary.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
 temporary.chmod(0o600)

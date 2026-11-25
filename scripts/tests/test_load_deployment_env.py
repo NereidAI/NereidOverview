@@ -53,6 +53,10 @@ esac
 if [[ -n "${FAKE_CALLS:-}" ]]; then
   printf '%s %s\\n' "$command" "$reference" >> "$FAKE_CALLS"
 fi
+if [[ "$command" == resolve && "${FAKE_FAIL_RESOLVE:-0}" == 1 ]]; then
+  echo "simulated registry resolve failure" >&2
+  exit 42
+fi
 case "$command" in
   resolve) printf '%s\\n' "${FAKE_RESOLVE_DIGEST:-$FAKE_DIGEST}" ;;
   manifest)
@@ -281,6 +285,62 @@ printf '%s\\n' "$PRE_ROOT"
             self.assertTrue(all(DIGEST in line for line in calls if line.startswith(("manifest ", "pull "))))
             self.assertTrue((release / f"pre-nereidforge-installer-{VERSION}").is_dir())
             self.assertFalse((release / f"pre-nereidforge-installer-{SECOND_VERSION}").exists())
+
+    def test_stage_resolve_failure_preserves_error_and_cleans_exit_traps(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = root / "registry"
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            locks = deployment / "quick-install" / "artifact-locks"
+            state = deployment / "quick-install" / "state"
+            logs = deployment / "deploy-logs" / "quick-install"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            locks.mkdir(parents=True)
+            (state / "stages").mkdir(parents=True)
+            logs.mkdir(parents=True)
+            self.make_environment(deployment)
+            self.make_registry(registry)
+            make_oras(fake_bin)
+            script = f"""
+set -euo pipefail
+DEPLOYMENT_ROOT={shlex.quote(str(deployment))}
+source {shlex.quote(str(LOADER))}
+source {shlex.quote(str(RUNNER))}
+source {shlex.quote(str(ARTIFACTS))}
+QUICK_ARTIFACT_LOCK_DIR={shlex.quote(str(locks))}
+SUITE_STATE_DIR={shlex.quote(str(state))}
+SUITE_LOG_DIR={shlex.quote(str(logs))}
+install_stage() (
+  set -euo pipefail
+  suite_prepare_pre_frozen "$PRE_VERSION"
+)
+verify_stage() {{ return 0; }}
+suite_run_stage pre-artifact install_stage verify_stage PRE_VERSION
+"""
+            result = run_bash(
+                script,
+                self.pre_environment(
+                    deployment,
+                    fake_bin,
+                    registry,
+                    DIGEST,
+                    {"FAKE_FAIL_RESOLVE": "1"},
+                ),
+            )
+            log = (logs / "pre-artifact.log").read_text()
+            combined = result.stdout + result.stderr + log
+
+            self.assertEqual(result.returncode, 42, combined)
+            self.assertIn("simulated registry resolve failure", log)
+            self.assertNotIn("unbound variable", combined)
+            self.assertEqual((state / "current").read_text(), "pre-artifact=failed\n")
+            release = deployment / "pre-nereidforge" / "0.0.0-dev"
+            self.assertFalse(list(deployment.glob("anonymous-registry.*")))
+            self.assertFalse(list(release.glob("installer-digest-intent.txt.resolve.*")))
+            self.assertFalse((release / "installer-digest-intent.txt").exists())
+            self.assertFalse((release / "installer-digest.txt").exists())
 
     def test_completed_pre_artifact_before_suite_lock_does_not_resolve_again(self):
         with tempfile.TemporaryDirectory() as temporary:
