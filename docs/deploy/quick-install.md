@@ -60,6 +60,28 @@ To inspect the local journal without contacting or changing the cluster:
 scripts/install-suite.sh --config "$DEPLOYMENT_ROOT/deployment.env" status
 ```
 
+### Console progress and private detail
+
+The run command reports stage progress directly on the console. For example,
+`11/13 stages complete (85%)` means that 11 of the 13 ordered stages have
+completed; it is not an estimate of elapsed time or remaining duration. Each
+stage also prints its purpose, private log path, action/verification steps, and
+elapsed time. Completed stages are rechecked before they are skipped, and resume
+therefore advances quickly through already healthy stages.
+
+During an interactive long-running stage, the console reports elapsed time and
+the latest non-secret operational event every 15 seconds. Set
+`SUITE_PROGRESS_INTERVAL` to a different positive number of seconds, or to `0`
+to disable these periodic messages. Stage start, completion, failure, and
+final progress messages remain enabled. Non-interactive runs do not emit the
+periodic heartbeat by default.
+
+Success, waiting, and failure summaries include recent filtered activity so the
+operator can distinguish the current action without opening the full log. The
+filter relays only known operational messages and drops credential-shaped
+content. It does not replace or truncate the complete private stage log, which
+may contain sensitive values and retains its restrictive permissions.
+
 Only one run may operate on a deployment root at a time. The runner binds its
 journal to both the configured kubecontext and the live `kube-system` namespace
 UID. Before installation it writes a private mode-`0600` minified kubeconfig
