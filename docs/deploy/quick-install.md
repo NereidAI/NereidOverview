@@ -37,9 +37,11 @@ non-empty component must be readable, and kubectl merges them when creating the
 private minified copy. The configuration is trusted shell input, so keep it
 owned by the current user and inaccessible to group/other users.
 
-The installer generates product site values and retains passwords, tokens, and
-keys in separate mode-`0600` files under `DEPLOYMENT_ROOT`. It never prints
-those values. Back up the deployment root using the site's encrypted-backup
+The installer generates product values and retains passwords, tokens, and keys
+in the persistent files and temporary paths listed in §3. Its own status
+messages do not deliberately display retained secret values. Treat every
+generated values file, credential handoff, temporary render file, and private
+log as sensitive. Back up the deployment root using the site's encrypted-backup
 policy. In particular, do not delete the pre `site.env`, suite secret store, NF
 secret directory, or Link data/handoffs during recovery.
 
@@ -97,6 +99,41 @@ Changing the inputs of a completed stage is rejected. Resume is not an upgrade,
 rotation, or adoption mechanism. Use a separate reviewed upgrade/recovery plan
 for those operations.
 
+### Kubeflow apply retry window
+
+The `pre-kubeflow` stage renders each ordered target once and retries transient
+API, CRD, and admission-webhook failures using the same rendered bytes. Two
+optional, non-secret environment variables control this bounded retry window:
+
+| Variable | Value and behavior |
+|---|---|
+| `KUBEFLOW_APPLY_ATTEMPTS` | A positive integer setting the maximum apply attempts per target, including the switch to server-side apply after an annotation-size failure. |
+| `KUBEFLOW_APPLY_RETRY_DELAY` | A non-negative integer setting the delay between attempts in seconds. |
+
+When either variable is unset, the selected pre installer's built-in default
+applies. To make the retry policy explicit across pre artifact versions, add
+both values to `deployment.env`:
+
+```bash
+export KUBEFLOW_APPLY_ATTEMPTS="40"
+export KUBEFLOW_APPLY_RETRY_DELAY="15"
+```
+
+This example allows approximately ten minutes of retries per target, which can
+accommodate slow initial image pulls while admission webhooks start. For a
+single run without editing `deployment.env`, prefix the normal command instead:
+
+```bash
+KUBEFLOW_APPLY_ATTEMPTS=40 KUBEFLOW_APPLY_RETRY_DELAY=15 \
+scripts/install-suite.sh --config "$DEPLOYMENT_ROOT/deployment.env"
+```
+
+These settings change only the apply wait window. They do not modify the
+selected immutable artifact, suppress permanent errors, or bypass
+`pre-verify`. If the attempt budget is exhausted, the stage still fails closed;
+diagnose the cause and resume rather than deleting state or editing the
+extracted pre installer.
+
 ### External actions and independent Forge gates
 
 The installer pauses with exit code `20` and a named action rather than treating
@@ -128,7 +165,105 @@ Edit only the waiting stage's attestation, rerun the same command, and leave
 completed stages unchanged. Do not set every attestation preemptively merely to
 make the command unattended.
 
-## 3. Artifact and Secret behavior on rerun
+## 3. Local credential file inventory
+
+The following inventory covers the current quick-install wrapper and its
+referenced pre installer and NF verifier. These are files on the operator host,
+not Kubernetes Secrets; no credential values are shown here. Live Kubernetes
+Secrets remain canonical where the table says so. When selecting a different
+immutable pre artifact, verify any artifact-specific differences against that
+artifact's own source.
+
+The path aliases below make the exact locations explicit:
+
+| Alias | Expansion |
+|---|---|
+| `QUICK_VALUES_DIR` | `$DEPLOYMENT_ROOT/quick-install/values` |
+| `DEPLOY_VALUES_ROOT` | `${DEPLOY_VALUES_ROOT:-$DEPLOYMENT_ROOT/deploy-values}` |
+| `PRE_HANDOFF_DIR` (also `NF_HANDOFF_DIR`) | `$DEPLOY_VALUES_ROOT/nereidforge` |
+| `PRE_ENV_FILE` (also `NF_ENV_FILE`) | `$PRE_HANDOFF_DIR/site.env` |
+| `NF_SECRET_DIR` | `$DEPLOYMENT_ROOT/secrets/nereidforge` |
+| `DEPLOY_LOG_ROOT` | `${DEPLOY_LOG_ROOT:-$DEPLOYMENT_ROOT/deploy-logs}` |
+| `PRE_ROOT` | `$DEPLOYMENT_ROOT/pre-nereidforge/$PRE_VERSION/pre-nereidforge-installer-$PRE_RESOLVED_VERSION` |
+
+For example, in the default root-run setup, `$DEPLOYMENT_ROOT` expands to
+`/root/.nereidai-deployment`.
+
+### Persistent credential-bearing files
+
+Quick-created secret stores, generated product values, and NF secret files are
+mode `0600`; their private parent directories are mode `0700`. A generated or
+reproducible copy is still sensitive.
+
+| Exact path | Credential contents and recovery role |
+|---|---|
+| `$DEPLOYMENT_ROOT/secret-store/suite-secrets.json` | **Canonical local suite store**: Identity PostgreSQL, Keycloak administrator, suite-administrator and admin-client credentials; all four product OIDC client secrets; Sphere session, Valkey and Forge/Horizon/Link ticket secrets; Horizon PostgreSQL; Link JWT and PostgreSQL credentials. It is generated once and never refilled after initialization. |
+| `$QUICK_VALUES_DIR/nereididentity.generated.yaml` | Identity PostgreSQL, Keycloak administrator and suite-administrator passwords, admin-client secret, and Sphere/Horizon/Forge/Link OIDC client secrets. Generated from the suite store for Helm. |
+| `$QUICK_VALUES_DIR/nereidsphere.generated.yaml` | Sphere OIDC and admin-client secrets, session key, Forge/Horizon/Link `ssoSecret` tickets, and Valkey password when enabled. Generated from the suite store. |
+| `$QUICK_VALUES_DIR/nereidhorizon.generated.yaml` | Horizon PostgreSQL password and Sphere Horizon NS ticket; direct-OIDC client secret when that mode is enabled. Generated from the suite store. |
+| `$QUICK_VALUES_DIR/nereidlink.generated.yaml` | Link JWT, bundled PostgreSQL password, Link NS ticket or direct-OIDC client secret, and Forge S3 `accessKey`/`secretKey`. Generated from the suite store and canonical Forge handoff. |
+| `$PRE_ENV_FILE` (`$PRE_HANDOFF_DIR/site.env`) | `PG_ADMIN_PASSWORD`, `SEAWEEDFS_S3_ACCESS_KEY`, `SEAWEEDFS_S3_SECRET_KEY`, plaintext `DEX_STATIC_PASSWORD`, and bcrypt `DEX_STATIC_PASSWORD_HASH`, together with non-secret pre inputs. Retained pre recovery input; live pre resources become canonical after bootstrap. |
+| `$PRE_HANDOFF_DIR/service-tokens.env` | `NEREIDFORGE_LABELSTUDIO_TOKEN` and `NEREIDFORGE_CVAT_TOKEN` integration tokens. Retained handoff required by pre finalization and copied into the NF runtime Secret. |
+| `$PRE_HANDOFF_DIR/service-admin-credentials.env` | `LS_ADMIN_PASSWORD` and `CVAT_ADMIN_PASSWORD`, with the corresponding administrator usernames/email. Retained UI-administrator recovery handoff. |
+| `$PRE_ROOT/charts/labelstudio/values.yaml` | Label Studio chart `token` used as its static API token, distinct from the later DRF integration token. This is a generated chart input inside the verified pre extraction, not a canonical backup source; do not edit it manually. |
+| `$NF_SECRET_DIR/jwt` | `NEREIDFORGE_AUTH_JWT_SECRET`. Retained local mirror of the canonical NF runtime Secret. |
+| `$NF_SECRET_DIR/sso-client` | `NEREIDFORGE_SSO_NS_CLIENT_SECRET`, exactly matching the suite store's Forge ticket and the NF runtime Secret. |
+| `$NF_SECRET_DIR/admin-password` | NF administrator password. Retained local mirror of canonical `nereidforge/nereidforge-admin-credentials`. |
+| `$NF_SECRET_DIR/runtime-secret-patch.json` | NF JWT and Forge SSO secret in `stringData`. Regenerated patch input, not an independent source of truth. |
+| `$PRE_HANDOFF_DIR/admin-credentials.env` | Optional legacy `NF_ADMIN_PASSWORD` input read by the NF verifier when present. The quick application-only path does not create it; its NF administrator file is `$NF_SECRET_DIR/admin-password`. |
+| `$PRE_HANDOFF_DIR/seaweedfs-credentials.yaml` | Exactly `accessKey` and `secretKey` for Link's Forge S3 access. Generated after NF acceptance from canonical `nereidforge/seaweedfs-s3-credentials` and verified against it on resume. |
+| `$DEPLOYMENT_ROOT/quick-install/kubeconfig` | Minified, flattened cluster kubeconfig pinned to `KUBECONTEXT`; may contain a client private key, token, client certificate, or exec-credential configuration. |
+| `${KUBECONFIG:-$HOME/.kube/config}` | Operator-supplied source kubeconfig(s), including every non-empty colon-separated component. The example uses `$HOME/.kube/nereidai.kubeconfig`; quick-install reads but does not create this source. |
+
+The similarly named manual-path product files under
+`$DEPLOY_VALUES_ROOT/<product>/values.generated.yaml` are not the
+quick-install outputs; quick-install uses `$QUICK_VALUES_DIR` as listed above.
+
+### Temporary credential-bearing files
+
+These files normally exist only during an atomic rename, preflight, or Kubeflow
+render. `RENDER_WORKDIR` is created with `mktemp -d`, normally under `/tmp`, and
+the entire render tree is normally removed on exit. A hard interruption can
+leave remnants; treat them as sensitive rather than as recovery sources.
+
+| Exact path or pattern | Credential contents and lifetime |
+|---|---|
+| `$DEPLOYMENT_ROOT/secret-store/.suite-secrets.json.<random>` | Complete suite store during atomic write. |
+| `$QUICK_VALUES_DIR/.<product>.generated.yaml.<random>` | Complete private generated values for `nereididentity`, `nereidsphere`, `nereidhorizon`, or `nereidlink` during atomic write. |
+| `$PRE_HANDOFF_DIR/.site.env.<pid>.tmp` | Updated pre `site.env`, including all five pre credentials, during atomic write. |
+| `$NF_SECRET_DIR/.<filename>.<pid>.tmp` | Temporary `jwt`, `sso-client`, `admin-password`, or `runtime-secret-patch.json` content during atomic write. |
+| `$PRE_HANDOFF_DIR/.seaweedfs-credentials.yaml.<pid>.tmp` | Link Forge S3 handoff during atomic write. |
+| `$DEPLOYMENT_ROOT/quick-install/kubeconfig.XXXXXX` | Raw minified kubeconfig before rename to `quick-install/kubeconfig`. |
+| `$DEPLOYMENT_ROOT/quick-install/dex.XXXXXX` | Temporary htpasswd record containing `dex:$DEX_STATIC_PASSWORD_HASH`; deleted after verification. |
+| `$RENDER_WORKDIR/dex-passwords.yaml`, then `$RENDER_WORKDIR/kubeflow-manifests/common/dex/base/dex-passwords.yaml` | Rendered Dex Secret containing the real bcrypt hash before and after its rename within the temporary render tree. |
+| `$RENDER_WORKDIR/mlpipeline-minio-artifact-secret.yaml`, then `$RENDER_WORKDIR/kubeflow-manifests/applications/pipeline/upstream/third-party/seaweedfs/base/seaweedfs/mlpipeline-minio-artifact-secret.yaml` | Rendered KFP Secret containing the real SeaweedFS access and secret keys before and after its rename. |
+| `$RENDER_WORKDIR/nf-rendered.XXXXXX` | Complete rendered target YAML; Dex and KFP targets contain their rendered Secrets, and other vendored targets can contain static Secret literals. Deleted after each target. |
+
+### Sensitive logs and files that are not password stores
+
+- `$DEPLOY_LOG_ROOT/quick-install/pre-infra.log` and timestamped
+  infrastructure logs under `$DEPLOY_LOG_ROOT/pre-nereidforge/`
+  can contain Label Studio's static API token. All private logs must therefore
+  be protected as sensitive even though they are not intentional password
+  stores. `$RENDER_WORKDIR/nf-apply-error.XXXXXX` can also temporarily contain
+  an API rejection that echoes rendered Secret data.
+- `$DEPLOYMENT_ROOT/deployment.env` is private, trusted, non-secret shell input;
+  credential variables are rejected. `$QUICK_VALUES_DIR/<product>.site.yaml`,
+  `$PRE_HANDOFF_DIR/values.generated.yaml`, and
+  `$PRE_HANDOFF_DIR/operator-values.yaml` are deliberately non-secret.
+- `$DEPLOYMENT_ROOT/nereid-internal-ca.crt` and
+  `$DEPLOYMENT_ROOT/nereidlink-device-ca.pem` contain public CA certificates,
+  not their private keys. Quick-install state and artifact-lock files are also
+  intentionally non-secret.
+
+Use the site's encrypted-backup policy for the entire deployment root and the
+operator-supplied kubeconfig. Prioritize the canonical suite store, retained
+pre inputs and service handoffs, NF secret directory, and Link handoff during
+recovery. Generated values, patches, and extracted chart copies remain
+sensitive even when they can be reproduced. Never commit or upload any
+credential-bearing file listed in this section.
+
+## 4. Artifact and Secret behavior on rerun
 
 The first anonymous chart/pre resolution atomically records its OCI digest
 intent before downloading bytes. Retrieval then uses that digest, verifies the
@@ -173,7 +308,7 @@ shell tracing and do not upload deployment roots, generated values, private
 logs, credential handoffs, private kubeconfigs, or Secret stores to an issue or
 public artifact.
 
-## 4. Finish acceptance separately
+## 5. Finish acceptance separately
 
 A successful final stage means the central Link installation passed its
 programmatic gates. It does not replace the
