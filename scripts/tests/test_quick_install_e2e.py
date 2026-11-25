@@ -422,6 +422,44 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertIn("restore pg_admin_password", log.lower())
         self.assertNotIn("Generated", result.stdout + result.stderr + log)
 
+    def test_forge_initializes_missing_nf_sso_on_pre_owned_runtime_secret(self):
+        result = self.run_installer(
+            expected=20,
+            environment={"FAKE_PRE_RUNTIME_WITHOUT_NF_SSO": "yes"},
+        )
+
+        self.assertEqual(self.current_state(), "forge-acceptance=waiting")
+        self.assertIn("NF_LIVE_ACCEPTANCE_CONFIRMED=yes", result.stderr)
+        runtime = self.read_cluster()["secrets"]["nereidforge/nereidforge-service-credentials"]
+        store = json.loads(
+            (self.deployment / "secret-store" / "suite-secrets.json").read_text()
+        )
+        expected_sso = store["secrets"]["sphere.ticket.forge"]
+        self.assertEqual(runtime["NEREIDFORGE_SSO_NS_CLIENT_SECRET"], expected_sso)
+        self.assertEqual(runtime["NEREIDFORGE_LABELSTUDIO_TOKEN"], "fake-pre-labelstudio-token")
+        self.assertEqual(runtime["NEREIDFORGE_CVAT_TOKEN"], "fake-pre-cvat-token")
+        self.assertTrue(runtime["NEREIDFORGE_AUTH_JWT_SECRET"])
+        secret_dir = self.deployment / "secrets" / "nereidforge"
+        self.assertEqual((secret_dir / "sso-client").read_text(), expected_sso)
+        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge-backend\t"), 1)
+
+    def test_forge_rejects_a_different_existing_nf_sso_without_replacing_it(self):
+        mismatched = "fake-different-forge-sso"
+        result = self.run_installer(
+            expected=1,
+            environment={"FAKE_PRE_RUNTIME_SSO_OVERRIDE": mismatched},
+        )
+
+        self.assertEqual(self.current_state(), "forge=failed")
+        log = (self.deployment / "deploy-logs" / "quick-install" / "forge.log").read_text()
+        self.assertIn("Forge runtime SSO identity differs from Sphere", log)
+        runtime = self.read_cluster()["secrets"]["nereidforge/nereidforge-service-credentials"]
+        self.assertEqual(runtime["NEREIDFORGE_SSO_NS_CLIENT_SECRET"], mismatched)
+        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge-backend\t"), 0)
+        secret_dir = self.deployment / "secrets" / "nereidforge"
+        self.assertFalse((secret_dir / "sso-client").exists())
+        self.assertFalse((secret_dir / "jwt").exists())
+
     def test_nf_identity_is_not_generated_after_initialized_state_loses_both_copies(self):
         self.run_installer(expected=20)
         state = self.read_cluster()
