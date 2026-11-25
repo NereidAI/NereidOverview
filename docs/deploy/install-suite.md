@@ -1287,6 +1287,48 @@ openssl x509 -in "$DEPLOYMENT_ROOT/nereidlink-device-ca.pem" \
   -noout -subject -fingerprint -sha256
 ```
 
+A fresh chart creates `admin@nereidai.local` with an empty password; nobody can
+log in until the one-time bootstrap API sets it. Complete that bootstrap over a
+loopback-only Pod forward (the product's `post-deploy.sh` uses the same flow).
+The quick installer runs this automatically inside the `link` stage; the manual
+equivalent is:
+
+```bash
+LINK_STATE_DIR="$DEPLOY_VALUES_ROOT/nereidlink"
+LINK_CREDENTIALS="$LINK_STATE_DIR/admin-credentials.env"
+APP_POD="$(kubectl -n nereidlink get pod -l app.kubernetes.io/component=app \
+  -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n nereidlink port-forward "pod/$APP_POD" 127.0.0.1:18081:8080 &
+PF_PID=$!
+trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+sleep 3
+STATUS="$(curl --noproxy '*' -fsS http://127.0.0.1:18081/v1/auth/bootstrap-status)"
+if grep -q '"required":true' <<<"$STATUS"; then
+  ADMIN_PASSWORD="$(openssl rand -hex 24)"
+  printf '{"password":"%s"}' "$ADMIN_PASSWORD" \
+    | curl --noproxy '*' -fsS -X POST \
+      http://127.0.0.1:18081/v1/auth/bootstrap \
+      -H 'Content-Type: application/json' --data-binary @- \
+      -o /tmp/nereidlink-bootstrap-response.json
+  grep -q '"access_token"' /tmp/nereidlink-bootstrap-response.json
+  rm -f /tmp/nereidlink-bootstrap-response.json
+  umask 077
+  printf '%s\n' \
+    '# NereidLink built-in platform admin; save securely and never commit.' \
+    'LINK_ADMIN_EMAIL=admin@nereidai.local' \
+    "LINK_ADMIN_PASSWORD=$ADMIN_PASSWORD" > "$LINK_CREDENTIALS"
+  chmod 600 "$LINK_CREDENTIALS"
+else
+  echo 'Link admin is already initialized; existing password left unchanged'
+fi
+```
+
+Never print the password, bootstrap response, or token to the console. If
+bootstrap was already completed through the web UI or another tooling path, do
+not POST again: the API fails with "bootstrap already complete" and the existing
+password is retained. Re-running the status call must report
+`{"required":false}`.
+
 Link generates its own device CA and signs the MQTT server leaf with it. The
 exported `ca.pem` is the public CA certificate for edge MQTT verification; it is
 not the suite Ingress CA. Never export `ca-key.pem` or `server-key.pem`. Preserve
@@ -1297,9 +1339,13 @@ The migration init container must complete in the non-terminating Pods owned by
 the ReplicaSet that matches the current `nereidlink` Deployment template. An old
 ReplicaSet's success or failure is not current-revision evidence. The application
 must create the `nereidlink` bucket through Forge SeaweedFS. Check logs and
-storage before accepting the rollout. Complete the one-time administrator bootstrap through
-the web UI. Import any site license through the product's supported runtime
-interface; no signing private key is part of chart installation.
+storage before accepting the rollout. The one-time administrator bootstrap must
+also be complete: the quick installer performs it through the loopback
+bootstrap API and retains the generated password in
+`$DEPLOY_VALUES_ROOT/nereidlink/admin-credentials.env` (mode `0600`); an
+administrator initialized out of band is never reset. Import any site license
+through the product's supported runtime interface; no signing private key is
+part of chart installation.
 
 ## 9. Open Horizon edge delivery
 

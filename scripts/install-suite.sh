@@ -110,6 +110,14 @@ QUICK_VALUES_DIR="$QUICK_INSTALL_DIR/values"
 QUICK_ARTIFACT_LOCK_DIR="$QUICK_INSTALL_DIR/artifact-locks"
 SUITE_STATE_DIR="$QUICK_INSTALL_DIR/state"
 SUITE_LOG_DIR="$DEPLOY_LOG_ROOT/quick-install"
+# NereidLink creates a fixed empty-password platform admin in migration 0049 and
+# exposes a one-time bootstrap API. The installer completes that bootstrap itself
+# instead of leaving a setup screen for the first browser visitor.
+LINK_ADMIN_EMAIL="admin@nereidai.local"
+LINK_ADMIN_CREDENTIALS_FILE="$DEPLOY_VALUES_ROOT/nereidlink/admin-credentials.env"
+LINK_LOCAL_HTTP_PORT="${LINK_LOCAL_HTTP_PORT:-18081}"
+LINK_API_READY_ATTEMPTS="${LINK_API_READY_ATTEMPTS:-20}"
+LINK_API_RETRY_DELAY="${LINK_API_RETRY_DELAY:-2}"
 
 export DEPLOYMENT_ROOT DEPLOY_VALUES_ROOT DEPLOY_LOG_ROOT DEPLOYMENT_ENV_FILE
 export KUBECONTEXT BASE_DOMAIN NFS_SERVER NFS_EXPORT LINK_MQTTS_HOST
@@ -178,7 +186,7 @@ declare -A SUITE_STAGE_DESCRIPTIONS=(
     [pre-verify]="Verify infrastructure, Kubeflow, Model Registry, and the NF handoff"
     [forge]="Install the frozen selected-profile NF charts and verify application rollouts"
     [forge-acceptance]="Run exact-commit NF business verification and retain the Link handoff"
-    [link]="Install NereidLink and verify migration, storage, MQTT, and application health"
+    [link]="Install NereidLink, complete the one-time platform admin bootstrap, and verify migration, storage, MQTT, and application health"
 )
 declare -A SUITE_STAGE_INPUTS=(
     [prerequisites]="NFS_SERVER NFS_EXPORT STORAGE_CLASS LOCAL_STORAGE_CLASS INGRESS_CLASS HARDWARE_PLUGINS"
@@ -1233,6 +1241,137 @@ if document != canonical:
 PY
 )
 
+# Establish a loopback-only forward to the Link app Pod and expose
+# LINK_API_BASE/LINK_API_WORK_DIR. This mirrors the product post-deploy flow and
+# keeps the one-time bootstrap call off the public Ingress. Callers run in a
+# subshell; the EXIT trap reaps the forward and removes temporary response files.
+link_start_api_forward() {
+    local pod attempt
+    LINK_API_WORK_DIR="$(mktemp -d "$QUICK_INSTALL_DIR/link-api.XXXXXX")"
+    chmod 700 "$LINK_API_WORK_DIR"
+    pod="$(kubectl -n nereidlink get pod \
+        -l app.kubernetes.io/component=app \
+        -o jsonpath='{.items[0].metadata.name}')"
+    if [[ -z "$pod" ]]; then
+        rm -rf "$LINK_API_WORK_DIR"
+        suite_fail "no NereidLink application Pod is available for the admin API forward"
+        return 1
+    fi
+    kubectl -n nereidlink port-forward "pod/$pod" \
+        "127.0.0.1:${LINK_LOCAL_HTTP_PORT}:8080" \
+        >"$LINK_API_WORK_DIR/port-forward.log" 2>&1 &
+    LINK_API_PID=$!
+    LINK_API_BASE="http://127.0.0.1:${LINK_LOCAL_HTTP_PORT}"
+    trap 'kill "$LINK_API_PID" 2>/dev/null || true; rm -rf "$LINK_API_WORK_DIR"' EXIT
+    for ((attempt = 1; attempt <= LINK_API_READY_ATTEMPTS; attempt++)); do
+        if curl --noproxy '*' --silent --show-error --fail --max-time 5 \
+            "$LINK_API_BASE/healthz" >/dev/null 2>&1; then
+            return 0
+        fi
+        if ! kill -0 "$LINK_API_PID" 2>/dev/null; then
+            suite_fail "the NereidLink local API forward exited before becoming ready"
+            return 1
+        fi
+        sleep "$LINK_API_RETRY_DELAY"
+    done
+    suite_fail "NereidLink API did not become reachable on the local forward within the retry budget"
+    return 1
+}
+
+# Complete Link's one-time platform admin bootstrap when it is still pending.
+# An existing non-empty password is never reset: the API itself rejects a second
+# bootstrap and this function does not call it once status reports completion.
+bootstrap_link_admin() (
+    set -euo pipefail
+    local status_file response_file admin_password required
+    link_start_api_forward
+    status_file="$LINK_API_WORK_DIR/bootstrap-status.json"
+    curl --noproxy '*' --silent --show-error --fail \
+        --max-time "${NEREID_CURL_TIMEOUT:-60}" \
+        "$LINK_API_BASE/v1/auth/bootstrap-status" -o "$status_file"
+    required="$(python3 - "$status_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        body = json.load(source)
+except (OSError, json.JSONDecodeError):
+    raise SystemExit("invalid NereidLink bootstrap-status response")
+if not isinstance(body.get("required"), bool):
+    raise SystemExit("NereidLink bootstrap-status response lacks a boolean required field")
+print("true" if body["required"] else "false")
+PY
+)"
+    if [[ "$required" != true ]]; then
+        printf '[INFO] Link platform admin is already initialized; existing password left unchanged\n'
+        return 0
+    fi
+    if [[ -f "$LINK_ADMIN_CREDENTIALS_FILE" ]]; then
+        # Resume after an interrupted bootstrap: reuse the retained password
+        # instead of orphaning it with a second generated value.
+        admin_password="$(sed -n 's/^LINK_ADMIN_PASSWORD=//p' "$LINK_ADMIN_CREDENTIALS_FILE" | head -n1)"
+        if [[ -z "$admin_password" ]]; then
+            suite_fail "retained Link admin credential file exists but contains no LINK_ADMIN_PASSWORD"
+            exit 1
+        fi
+        printf '[INFO] Retrying Link admin bootstrap with the retained private password\n'
+    else
+        admin_password="$(openssl rand -hex 24)"
+    fi
+    response_file="$LINK_API_WORK_DIR/bootstrap-response.json"
+    printf '{"password":"%s"}' "$admin_password" \
+        | curl --noproxy '*' --silent --show-error --fail \
+            --max-time "${NEREID_CURL_TIMEOUT:-60}" \
+            -X POST "$LINK_API_BASE/v1/auth/bootstrap" \
+            -H 'Content-Type: application/json' --data-binary @- \
+            -o "$response_file"
+    grep -q '"access_token"' "$response_file" || {
+        suite_fail "NereidLink admin bootstrap response did not contain an access token"
+        exit 1
+    }
+    suite_atomic_write "$LINK_ADMIN_CREDENTIALS_FILE" "$(printf '%s\n' \
+        '# NereidLink built-in platform admin; save securely and never commit.' \
+        "LINK_ADMIN_EMAIL=$LINK_ADMIN_EMAIL" \
+        "LINK_ADMIN_PASSWORD=$admin_password")"
+    printf '[INFO] Link platform admin initialized; private credential file: %s\n' \
+        "$LINK_ADMIN_CREDENTIALS_FILE"
+)
+
+# Read-only gate used by live verification and by resume of a completed stage.
+verify_link_bootstrap() (
+    set -euo pipefail
+    local status_file
+    link_start_api_forward
+    status_file="$LINK_API_WORK_DIR/bootstrap-status.json"
+    curl --noproxy '*' --silent --show-error --fail \
+        --max-time "${NEREID_CURL_TIMEOUT:-60}" \
+        "$LINK_API_BASE/v1/auth/bootstrap-status" -o "$status_file"
+    python3 - "$status_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        body = json.load(source)
+except (OSError, json.JSONDecodeError):
+    raise SystemExit("invalid NereidLink bootstrap-status response")
+if body.get("required") is not False:
+    raise SystemExit("NereidLink first-run administrator bootstrap is still required")
+PY
+    if [[ -f "$LINK_ADMIN_CREDENTIALS_FILE" ]]; then
+        (( (0$(stat -c '%a' "$LINK_ADMIN_CREDENTIALS_FILE") & 077) == 0 )) || {
+            suite_fail "Link admin credential file must be mode 0600: $LINK_ADMIN_CREDENTIALS_FILE"
+            exit 1
+        }
+        grep -q "^LINK_ADMIN_EMAIL=$LINK_ADMIN_EMAIL$" "$LINK_ADMIN_CREDENTIALS_FILE" || {
+            suite_fail "retained Link admin credential file has an unexpected administrator identity"
+            exit 1
+        }
+    fi
+    printf '[INFO] Link administrator bootstrap completion verified\n'
+)
+
 install_link() (
     set -euo pipefail
     local chart
@@ -1245,6 +1384,7 @@ install_link() (
     helm upgrade --install nereidlink "$chart" \
         --namespace nereidlink --create-namespace \
         --wait --timeout 8m --values "$RENDERED_PRODUCT_VALUES"
+    bootstrap_link_admin
 )
 
 verify_link_storage() (
@@ -1395,6 +1535,7 @@ verify_link() (
     curl --fail --silent --show-error --max-time "$NEREID_CURL_TIMEOUT" \
         --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
         "https://nereidlink.$BASE_DOMAIN/healthz" >/dev/null
+    verify_link_bootstrap
     record_nereid_images nereidlink
     verify_link_storage
     kubectl -n nereidlink logs deployment/nereidlink -c nereidlink --since=10m \
