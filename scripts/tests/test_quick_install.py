@@ -83,6 +83,32 @@ class QuickInstallContractTest(unittest.TestCase):
         self.assertIn("their own procedures or automation", readme)
         self.assertRegex(self.guide, r"without\s+following this guide")
 
+    def test_kubeflow_retry_controls_and_credential_file_inventory_are_documented(self):
+        for name in ("KUBEFLOW_APPLY_ATTEMPTS", "KUBEFLOW_APPLY_RETRY_DELAY"):
+            self.assertIn(name, self.guide)
+        for path in (
+            "secret-store/suite-secrets.json",
+            "nereididentity.generated.yaml",
+            "nereidsphere.generated.yaml",
+            "nereidhorizon.generated.yaml",
+            "nereidlink.generated.yaml",
+            "site.env",
+            "service-tokens.env",
+            "service-admin-credentials.env",
+            "charts/labelstudio/values.yaml",
+            "admin-credentials.env",
+            "runtime-secret-patch.json",
+            "seaweedfs-credentials.yaml",
+            "kubeconfig.XXXXXX",
+            "dex.XXXXXX",
+            "dex-passwords.yaml",
+            "mlpipeline-minio-artifact-secret.yaml",
+            "nf-rendered.XXXXXX",
+            "pre-infra.log",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(path, self.guide)
+
 
 class QuickInstallStatusTest(unittest.TestCase):
     def make_config(self, root, extra=""):
