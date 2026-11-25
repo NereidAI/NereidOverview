@@ -169,7 +169,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertEqual(self.current_state(), "pre-kubeflow=failed")
         self.assertEqual(self.count_calls("pre\t10_infra"), 1)
         self.assertEqual(self.count_calls("pre\t30_install-kubeflow"), 1)
-        self.assertNotIn("nereidforge-backend", self.read_cluster()["releases"])
+        self.assertNotIn("nereidforge", self.read_cluster()["releases"])
         self.assertNotIn("nereidlink", self.read_cluster()["releases"])
         self.assertFalse(any("UNEXPECTED-CONTINUED" in line for line in self.call_lines()))
         canonical = self.canonical_identities()
@@ -249,7 +249,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertNotIn("PG_ADMIN_PASSWORD=", self.pre_environment().read_text())
         self.assertNotIn("SEAWEEDFS_S3_ACCESS_KEY=", self.pre_environment().read_text())
         self.assertEqual(self.count_calls("pre\t10_infra"), 0)
-        self.assertNotIn("nereidforge-backend", self.read_cluster()["releases"])
+        self.assertNotIn("nereidforge", self.read_cluster()["releases"])
         self.assertNotIn("nereidlink", self.read_cluster()["releases"])
         self.assertEqual(self.current_state(), "pre-artifact=failed")
 
@@ -572,7 +572,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertTrue(runtime["NEREIDFORGE_AUTH_JWT_SECRET"])
         secret_dir = self.deployment / "secrets" / "nereidforge"
         self.assertEqual((secret_dir / "sso-client").read_text(), expected_sso)
-        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge-backend\t"), 1)
+        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge\t"), 1)
 
     def test_forge_rejects_a_different_existing_nf_sso_without_replacing_it(self):
         mismatched = "fake-different-forge-sso"
@@ -586,7 +586,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertIn("Forge runtime SSO identity differs from Sphere", log)
         runtime = self.read_cluster()["secrets"]["nereidforge/nereidforge-service-credentials"]
         self.assertEqual(runtime["NEREIDFORGE_SSO_NS_CLIENT_SECRET"], mismatched)
-        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge-backend\t"), 0)
+        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge\t"), 0)
         secret_dir = self.deployment / "secrets" / "nereidforge"
         self.assertFalse((secret_dir / "sso-client").exists())
         self.assertFalse((secret_dir / "jwt").exists())
@@ -599,15 +599,15 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.write_cluster(state)
         self.marker("forge").unlink()
         (self.deployment / "secrets" / "nereidforge" / "jwt").unlink()
-        backend_calls = self.count_calls("helm\tupgrade\t--install\tnereidforge-backend\t")
+        forge_calls = self.count_calls("helm\tupgrade\t--install\tnereidforge\t")
 
         result = self.run_installer(expected=1)
 
         runtime_after = self.read_cluster()["secrets"]["nereidforge/nereidforge-service-credentials"]
         self.assertNotIn("NEREIDFORGE_AUTH_JWT_SECRET", runtime_after)
         self.assertEqual(
-            self.count_calls("helm\tupgrade\t--install\tnereidforge-backend\t"),
-            backend_calls,
+            self.count_calls("helm\tupgrade\t--install\tnereidforge\t"),
+            forge_calls,
         )
         self.assertEqual(self.current_state(), "forge=failed")
         log = (self.deployment / "deploy-logs" / "quick-install" / "forge.log").read_text()
@@ -689,7 +689,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         )
 
         self.assertEqual(self.current_state(), "forge=failed")
-        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge-backend\t"), 0)
+        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge\t"), 0)
         log = (self.deployment / "deploy-logs" / "quick-install" / "forge.log").read_text()
         self.assertIn("could not query retained Secret", log)
 
@@ -839,7 +839,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.run_installer(expected=1, environment={"FAKE_SKIP_PRE_RUNTIME_SECRET": "yes"})
 
         self.assertEqual(self.current_state(), "forge=failed")
-        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge-backend\t"), 0)
+        self.assertEqual(self.count_calls("helm\tupgrade\t--install\tnereidforge\t"), 0)
         self.assertNotIn("nereidforge/nereidforge-service-credentials", self.read_cluster()["secrets"])
         log = (self.deployment / "deploy-logs" / "quick-install" / "forge.log").read_text()
         self.assertIn("NotFound", log)

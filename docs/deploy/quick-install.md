@@ -107,7 +107,7 @@ manual recovery procedure for those installations.
 | `pre-infra` | Only the pre infrastructure stage and infrastructure verifier |
 | `pre-kubeflow` | Only the Kubeflow stage and Kubeflow verifier; does not rerun infrastructure |
 | `pre-verify` | Infrastructure, Kubeflow, Model Registry, and non-secret NF handoff verification |
-| `forge` | Independent selected-profile NF-gate attestation, retained NF Secrets, three frozen application charts, handoff preflight and rollouts |
+| `forge` | Independent selected-profile NF-gate attestation, retained NF Secrets, two frozen application charts (consolidated `nereidforge` + `ml-backend`), handoff preflight and rollouts |
 | `forge-acceptance` | Exact-commit NF verifier with interrupted-clone repair, manual live acceptance, canonical SeaweedFS-to-Link handoff |
 | `link` | Frozen chart, generated values using the exact Forge identity, rollouts, health/MQTT Service checks, successful migration in non-terminating Pods owned by the current Deployment-matching ReplicaSet, and authenticated Forge SeaweedFS bucket verification |
 
@@ -124,9 +124,9 @@ for those operations.
 ### Verifier-only commit override
 
 By default, `forge-acceptance` checks out the NF verifier at the same immutable
-commit as the frozen NF backend chart. If a reviewed fix changes only the
-verifier, an operator can select that fix without republishing or changing the
-runtime artifacts:
+commit as the frozen consolidated `nereidforge` chart. If a reviewed fix changes
+only the verifier, an operator can select that fix without republishing or
+changing the runtime artifacts:
 
 ```bash
 # Replace this example with the reviewed, full NF commit ID.
@@ -199,7 +199,7 @@ a Helm command or an attestation as proof of external acceptance:
    is not required for this pre-only boundary.
 4. Before NF applications, independently verify all images in the selected
    profile (`full`: 23; `cpu-xpu`: 18, retaining every Intel XPU image) and
-   exactly four NF charts. Then set `NF_GATE_CONFIRMED=yes`.
+   exactly three NF charts. Then set `NF_GATE_CONFIRMED=yes`.
 5. After the exact-commit NF verifier, complete browser SSO/login/logout, a real
    KFP run, Label Studio/CVAT integration, notebook WebSockets, and all four
    SeaweedFS buckets with authenticated list access. Then set

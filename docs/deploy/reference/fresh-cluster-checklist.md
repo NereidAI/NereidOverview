@@ -141,7 +141,7 @@ installation have separate artifact requirements.
 - [ ] **NF artifact gate:** before §§7.3–7.5, use
       `NEREIDFORGE_VERSION=0.0.0-dev` and confirm the selected `publish-dev`
       profile passed anonymous verification: 23 images for `full`, or 18
-      core/CPU/Intel-XPU images for `cpu-xpu`, plus exactly four NF charts.
+      core/CPU/Intel-XPU images for `cpu-xpu`, plus exactly three NF charts.
       Record the profile, independent resolved version, digests, and source
       commit. **Stop after pre acceptance if that evidence is absent.** Then
       confirm the three

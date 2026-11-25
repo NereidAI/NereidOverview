@@ -63,9 +63,9 @@ class ForgeDevelopmentRunbookTest(unittest.TestCase):
         self.assertIn("oras pull", loader)
         self.assertNotIn("curl", pre_section)
         self.assertNotIn("PRE_DOWNLOAD", pre_section)
-        for chart in ("nereidforge-backend", "nereidforge-frontend", "nereidforge-ml-backend"):
+        for chart in ("nereidforge", "nereidforge-ml-backend"):
             self.assertIn(f'pull_nereid_chart {chart} "$NEREIDFORGE_VERSION"', nf_section)
-        self.assertEqual(nf_section.count("pull_nereid_chart "), 3)
+        self.assertEqual(nf_section.count("pull_nereid_chart "), 2)
         self.assertNotIn("oci://", nf_section)
         self.assertNotIn("nereidforge-tenant-check", nf_section)
 
@@ -134,7 +134,7 @@ class ForgeDevelopmentRunbookTest(unittest.TestCase):
         nf_section = self.section.split("### 7.4", 1)[1].split("### 7.5", 1)[0]
         install = next(
             block for block in bash_blocks(nf_section)
-            if "helm upgrade --install nereidforge-backend" in block
+            if 'helm upgrade --install nereidforge "$NEREIDFORGE_APP_CHART"' in block
         )
         self.assertTrue(install.startswith("(\n  set -euo pipefail\n"), install)
         self.assertTrue(install.rstrip().endswith(")"), install)
@@ -155,7 +155,7 @@ class ForgeDevelopmentRunbookTest(unittest.TestCase):
         self.assertIn("image_profile=cpu-xpu", gate)
         self.assertIn("18 core/CPU/Intel-XPU", gate)
         self.assertIn("every Intel\nXPU image remains required", gate)
-        self.assertIn("exactly four NF OCI charts", gate)
+        self.assertIn("exactly three NF OCI charts", gate)
         self.assertIn("do not start Link", gate)
 
 

@@ -98,17 +98,18 @@ same OCI digest and byte-identical archive.
 
 The complete Forge development snapshot comprises the independent
 pre-NereidForge ORAS installer and five supporting charts, followed by exactly
-four NF charts and one selected NF image profile: all 23 images for `full`, or
+three NF charts and one selected NF image profile: all 23 images for `full`, or
 18 core/CPU/Intel-XPU images for `cpu-xpu`. The latter excludes only the five
 AMD/NVIDIA trainer images; Intel XPU images remain mandatory. A formal release
-is not required. The fourth NF chart, `nereidforge-tenant-check`, is
-verification-only; only the backend, frontend, and ML backend charts install
-applications. There is no NF source-installer artifact.
+is not required. The third NF chart, `nereidforge-tenant-check`, is
+verification-only; only the consolidated `nereidforge` chart (API, worker, and
+the embedded SPA frontend) and the ML backend chart install applications.
+There is no NF source-installer artifact.
 
 Backend/frontend images or a subset of charts alone are not a complete Forge
 installation channel. The gates are independently enforceable: the anonymously
 verified pre installer and five supporting charts permit pre-only §7.2, while
-every image in the selected `full` or `cpu-xpu` profile and all four NF charts
+every image in the selected `full` or `cpu-xpu` profile and all three NF charts
 must pass their separate anonymous gate before NF §§7.3–7.5. Record the image
 profile, each resolved immutable version, OCI digest, and source commit. Missing
 NF evidence stops the operator after pre acceptance; it
