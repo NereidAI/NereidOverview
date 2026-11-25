@@ -180,6 +180,11 @@ declare -A SUITE_STAGE_INPUTS=(
     [forge-acceptance]="NF_LIVE_ACCEPTANCE_CONFIRMED"
     [link]="NEREIDLINK_VERSION BASE_DOMAIN STORAGE_CLASS LOCAL_STORAGE_CLASS INGRESS_CLASS LINK_MQTTS_HOST"
 )
+# Preserve existing default-input fingerprints while recording an explicit
+# verifier-only override as part of the acceptance stage's immutable identity.
+if [[ -n "${NF_VERIFIER_REF:-}" ]]; then
+    SUITE_STAGE_INPUTS[forge-acceptance]+=" NF_VERIFIER_REF"
+fi
 
 require_confirmation() {
     local variable="$1" reason="$2"
@@ -265,6 +270,10 @@ validate_configuration() (
             exit 1
         }
     done
+    if [[ -n "${NF_VERIFIER_REF:-}" && ! "$NF_VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "NF_VERIFIER_REF must be a full 40-character lowercase Git commit ID" >&2
+        exit 1
+    fi
     for version in \
         "$NEREIDIDENTITY_VERSION" "$NEREIDSPHERE_VERSION" "$NEREIDHORIZON_VERSION" \
         "$PRE_VERSION" "$NEREIDFORGE_VERSION" "$NEREIDLINK_VERSION"
@@ -1082,27 +1091,33 @@ prepare_nf_verifier_checkout() {
 }
 
 run_nf_verifier() {
-    local version short_sha verifier temporary
+    local version short_sha verifier_ref checkout_id verifier temporary
     version="$(suite_frozen_chart_version nereidforge-backend "$NEREIDFORGE_VERSION")"
     short_sha="${version#0.0.0-dev-}"
     [[ "$short_sha" =~ ^[0-9a-f]{7}$ ]] || {
         echo "NF verifier requires an immutable development chart version" >&2
         return 1
     }
-    verifier="$DEPLOYMENT_ROOT/verifiers/nereidforge-$version"
+    verifier_ref="$short_sha"
+    checkout_id="$version"
+    if [[ -n "${NF_VERIFIER_REF:-}" ]]; then
+        verifier_ref="$NF_VERIFIER_REF"
+        checkout_id="$version-verifier-$verifier_ref"
+    fi
+    verifier="$DEPLOYMENT_ROOT/verifiers/nereidforge-$checkout_id"
     install -d -m 700 "$DEPLOYMENT_ROOT/verifiers"
     if [[ ! -d "$verifier/.git" ]]; then
         [[ ! -e "$verifier" ]] || {
             echo "NF verifier path exists but is not a Git checkout: $verifier" >&2
             return 1
         }
-        temporary="$(mktemp -d "$DEPLOYMENT_ROOT/verifiers/.nereidforge-$version.XXXXXX")"
+        temporary="$(mktemp -d "$DEPLOYMENT_ROOT/verifiers/.nereidforge-$checkout_id.XXXXXX")"
         if ! git clone --filter=blob:none --no-checkout \
             https://github.com/NereidAI/NereidForge.git "$temporary"; then
             rm -rf "$temporary"
             return 1
         fi
-        if ! prepare_nf_verifier_checkout "$temporary" "$short_sha"; then
+        if ! prepare_nf_verifier_checkout "$temporary" "$verifier_ref"; then
             rm -rf "$temporary"
             return 1
         fi
@@ -1111,7 +1126,7 @@ run_nf_verifier() {
             return 1
         fi
     else
-        prepare_nf_verifier_checkout "$verifier" "$short_sha" || return 1
+        prepare_nf_verifier_checkout "$verifier" "$verifier_ref" || return 1
     fi
     NF_ENV_FILE="$PRE_ENV_FILE" NF_HANDOFF_DIR="$PRE_HANDOFF_DIR" \
         bash "$verifier/scripts/60_verify/nf-check.sh"

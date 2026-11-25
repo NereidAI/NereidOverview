@@ -99,6 +99,33 @@ Changing the inputs of a completed stage is rejected. Resume is not an upgrade,
 rotation, or adoption mechanism. Use a separate reviewed upgrade/recovery plan
 for those operations.
 
+### Verifier-only commit override
+
+By default, `forge-acceptance` checks out the NF verifier at the same immutable
+commit as the frozen NF backend chart. If a reviewed fix changes only the
+verifier, an operator can select that fix without republishing or changing the
+runtime artifacts:
+
+```bash
+# Replace this example with the reviewed, full NF commit ID.
+export NF_VERIFIER_REF="0123456789abcdef0123456789abcdef01234567"
+```
+
+Add the setting to `deployment.env` before the initial acceptance run or while
+`forge-acceptance` is incomplete, then rerun the normal command. The value must
+be exactly 40 lowercase hexadecimal characters identifying a Git commit;
+branches, tags, short SHA values, and malformed references are rejected before
+cluster installation begins. Use a commit reachable from the NF repository's
+default branch after its PR has been merged.
+
+The override has a separate checkout under `$DEPLOYMENT_ROOT/verifiers/`. It
+changes neither `NEREIDFORGE_VERSION` nor any frozen chart or image digest, and
+it does not rotate credentials or weaken the verifier's HTTP checks. Leaving it
+unset preserves the original checkout path and stage fingerprints. Once an
+override is recorded in a completed acceptance stage, changing or removing it
+is rejected as a completed-input change. It never substitutes for the manual
+`NF_LIVE_ACCEPTANCE_CONFIRMED=yes` attestation.
+
 ### Kubeflow apply retry window
 
 The `pre-kubeflow` stage renders each ordered target once and retries transient

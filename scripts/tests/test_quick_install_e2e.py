@@ -613,6 +613,57 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertIn("current-context: test-context", private.read_text())
         self.assertEqual(self.current_state(), "link=complete")
 
+    def test_verifier_override_uses_immutable_commit_without_changing_chart(self):
+        verifier_ref = "abcdef1" + "a" * 33
+        self.write_config(NF_VERIFIER_REF=verifier_ref)
+
+        self.run_installer(expected=20)
+
+        self.assertEqual(self.current_state(), "forge-acceptance=waiting")
+        verifier = self.deployment / "verifiers" / (
+            f"nereidforge-0.0.0-dev-abcdef1-verifier-{verifier_ref}"
+        )
+        self.assertTrue((verifier / "scripts" / "60_verify" / "nf-check.sh").is_file())
+        self.assertTrue(any(
+            line.startswith("git\t-C\t")
+            and line.endswith(f"\tcheckout\t--detach\t{verifier_ref}")
+            for line in self.call_lines()
+        ))
+        self.assertFalse(
+            (self.deployment / "verifiers" / "nereidforge-0.0.0-dev-abcdef1").exists()
+        )
+        self.assertEqual(self.read_cluster()["chart_version"], "0.0.0-dev-abcdef1")
+
+    def test_verifier_override_rejects_mutable_or_malformed_references(self):
+        for verifier_ref in ("main", "abcdef1", "A" * 40, "g" * 40, "a" * 41):
+            with self.subTest(verifier_ref=verifier_ref):
+                self.write_config(NF_VERIFIER_REF=verifier_ref)
+                result = self.run_installer(expected=1)
+                self.assertIn("NF_VERIFIER_REF", result.stderr)
+                self.assertIn("40", result.stderr)
+        self.assertEqual(self.count_calls("git\tclone\t"), 0)
+        self.assertEqual(self.count_calls("helm\tupgrade\t--install\t"), 0)
+
+    def test_completed_acceptance_rejects_changed_verifier_ref(self):
+        verifier_ref = "abcdef1" + "a" * 33
+        self.write_config(
+            NF_VERIFIER_REF=verifier_ref,
+            NF_LIVE_ACCEPTANCE_CONFIRMED="yes",
+        )
+        self.run_installer()
+        self.assertEqual(self.current_state(), "link=complete")
+        self.assertEqual(self.count_calls("git\tclone\t"), 1)
+
+        self.write_config(
+            NF_VERIFIER_REF="abcdef1" + "b" * 33,
+            NF_LIVE_ACCEPTANCE_CONFIRMED="yes",
+        )
+        result = self.run_installer(expected=1)
+
+        self.assertEqual(self.current_state(), "forge-acceptance=blocked-config-change")
+        self.assertIn("completed with different inputs", result.stderr)
+        self.assertEqual(self.count_calls("git\tclone\t"), 1)
+
     def test_interrupted_verifier_clone_is_fetched_and_resumed(self):
         verifier = self.deployment / "verifiers" / "nereidforge-0.0.0-dev-abcdef1"
         (verifier / ".git").mkdir(parents=True)
