@@ -1079,15 +1079,14 @@ PY
 install_forge() (
     set -euo pipefail
     require_confirmation NF_GATE_CONFIRMED \
-        "Verify every image in the selected NF_IMAGE_PROFILE and exactly four NF charts through the independent anonymous gate, then set NF_GATE_CONFIRMED=yes."
+        "Verify every image in the selected NF_IMAGE_PROFILE and exactly three NF charts through the independent anonymous gate, then set NF_GATE_CONFIRMED=yes."
     prepare_pre_runtime
     prepare_nf_secrets
-    local backend frontend ml version chart
-    backend="$(suite_pull_chart_frozen nereidforge-backend "$NEREIDFORGE_VERSION")"
-    frontend="$(suite_pull_chart_frozen nereidforge-frontend "$NEREIDFORGE_VERSION")"
+    local app ml version chart
+    app="$(suite_pull_chart_frozen nereidforge "$NEREIDFORGE_VERSION")"
     ml="$(suite_pull_chart_frozen nereidforge-ml-backend "$NEREIDFORGE_VERSION")"
-    version="$(suite_frozen_chart_version nereidforge-backend "$NEREIDFORGE_VERSION")"
-    for chart in nereidforge-frontend nereidforge-ml-backend; do
+    version="$(suite_frozen_chart_version nereidforge "$NEREIDFORGE_VERSION")"
+    for chart in nereidforge-ml-backend; do
         [[ "$(suite_frozen_chart_version "$chart" "$NEREIDFORGE_VERSION")" == "$version" ]] || {
             echo "NF application charts resolved to different immutable versions" >&2
             exit 1
@@ -1096,9 +1095,7 @@ install_forge() (
     printf '%s\n' "$version" > "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
     chmod 600 "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
     bash "$PRE_ROOT/scripts/40_check-nf-handoff.sh"
-    helm upgrade --install nereidforge-backend "$backend" --namespace nereidforge \
-        -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" --wait --timeout 10m
-    helm upgrade --install nereidforge-frontend "$frontend" --namespace nereidforge \
+    helm upgrade --install nereidforge "$app" --namespace nereidforge \
         -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" --wait --timeout 10m
     helm upgrade --install ml-backend "$ml" --namespace nereidforge \
         -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" --wait --timeout 10m
@@ -1131,7 +1128,7 @@ prepare_nf_verifier_checkout() {
 
 run_nf_verifier() {
     local version short_sha verifier_ref checkout_id verifier temporary
-    version="$(suite_frozen_chart_version nereidforge-backend "$NEREIDFORGE_VERSION")"
+    version="$(suite_frozen_chart_version nereidforge "$NEREIDFORGE_VERSION")"
     short_sha="${version#0.0.0-dev-}"
     [[ "$short_sha" =~ ^[0-9a-f]{7}$ ]] || {
         echo "NF verifier requires an immutable development chart version" >&2
@@ -1615,8 +1612,8 @@ preflight_cluster() {
         releases="$(helm list -A --all -o json | python3 -c '
 import json, sys
 managed = {
-    "nereididentity", "nereidsphere", "nereidhorizon", "nereidforge-backend",
-    "nereidforge-frontend", "ml-backend", "nereidlink",
+    "nereididentity", "nereidsphere", "nereidhorizon", "nereidforge",
+    "ml-backend", "nereidlink",
 }
 releases = sorted(item["name"] for item in json.load(sys.stdin) if item.get("name") in managed)
 print(",".join(releases))

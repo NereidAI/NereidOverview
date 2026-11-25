@@ -18,7 +18,7 @@ sources of truth.
 > anonymous `0.0.0-dev` artifact gates. Section 7.2 requires only the verified
 > pre installer and five supporting charts. Do not start NF §§7.3–7.5 until the
 > selected NF profile (23 `full` images, or 18 `cpu-xpu` images retaining Intel
-> XPU) and four NF charts pass their separate gate. Live NF and
+> XPU) and three NF charts pass their separate gate. Live NF and
 > SeaweedFS acceptance is still required; do not install Link until it passes.
 
 ## 1. Verified development channel and installation scope
@@ -588,7 +588,7 @@ satisfied. The separate NF gate applies only after pre acceptance.
 
 Forge has two independently versioned parts. `pre-nereidforge` owns the five
 supporting-service charts and the ordered Kubeflow Kustomize installation.
-NereidForge owns only its 23 application images and four OCI charts. Do not use
+NereidForge owns only its 23 application images and three OCI charts. Do not use
 the retired monolithic Forge installer, a Kubeflow umbrella chart, or an NF
 source-tree installation.
 
@@ -609,13 +609,13 @@ a pre-only installation.
 With `image_profile=full`, `publish-dev` must anonymously verify all 23 NF-owned
 images. With `image_profile=cpu-xpu`, it must verify 18 core/CPU/Intel-XPU
 images; only the five AMD/NVIDIA trainer images are excluded, and every Intel
-XPU image remains required. Both profiles require exactly four NF OCI charts,
+XPU image remains required. Both profiles require exactly three NF OCI charts,
 including manifest and chart pull/render checks. Record the selected profile and
 its run summary with the resolved version, digests, and source commit. Stop
 after §7.2 acceptance while that evidence is absent, and do not start Link.
 
 There is no NF source-installer asset or formal-release prerequisite. The
-fourth NF chart, `nereidforge-tenant-check`, is verification-only and is not an
+third NF chart, `nereidforge-tenant-check`, is verification-only and is not an
 application release. The commands below remain manual operator steps.
 
 ### 7.2 Install and accept pre-NereidForge
@@ -966,7 +966,8 @@ The successful Kubeflow stage automatically finalizes the NF handoff. It:
 
 Do not put credentials in that generated file. It contains endpoints, Secret
 names and keys, ingress paths, `namespace.create=false`, and post-install
-settings shared by the three NF application charts.
+settings shared by the two NF application releases (the consolidated
+`nereidforge` release and `ml-backend`).
 
 ### 7.3 Retain NF-owned Secrets and create a non-secret overlay
 
@@ -1020,9 +1021,9 @@ kubectl -n nereidforge patch secret nereidforge-service-credentials \
 ```
 
 Create the administrator Secret only after an explicit server `NotFound`
-response; every other query failure stops before mutation. The backend Helm hook
-uses its `password` key to seed `admin` when no such user exists; it does not
-rotate an existing password by default:
+response; every other query failure stops before mutation. The consolidated
+release's post-install Helm hook uses its `password` key to seed `admin` when
+no such user exists; it does not rotate an existing password by default:
 
 ```bash
 nereidforge_admin_output=""
@@ -1050,7 +1051,7 @@ credentials with Helm `--set`. The read-only preflight rejects these literal
 credential fields and requires all existing Secrets and keys, including the
 CNPG, SeaweedFS, KFP artifact, CA, runtime, and administrator contracts.
 
-### 7.4 Run preflight and install the three NF application charts
+### 7.4 Run preflight and install the two NF application releases
 
 Run this as one fail-closed block. It stops at the first failed pull, metadata
 check, preflight, or Helm command instead of continuing with an empty chart
@@ -1059,14 +1060,12 @@ path. The resolved version is persisted for the later acceptance stage.
 ```bash
 (
   set -euo pipefail
-  NEREIDFORGE_BACKEND_CHART="$(pull_nereid_chart nereidforge-backend "$NEREIDFORGE_VERSION")"
-  NEREIDFORGE_FRONTEND_CHART="$(pull_nereid_chart nereidforge-frontend "$NEREIDFORGE_VERSION")"
+  NEREIDFORGE_APP_CHART="$(pull_nereid_chart nereidforge "$NEREIDFORGE_VERSION")"
   NEREIDFORGE_ML_BACKEND_CHART="$(pull_nereid_chart nereidforge-ml-backend "$NEREIDFORGE_VERSION")"
-  test -s "$NEREIDFORGE_BACKEND_CHART"
-  test -s "$NEREIDFORGE_FRONTEND_CHART"
+  test -s "$NEREIDFORGE_APP_CHART"
   test -s "$NEREIDFORGE_ML_BACKEND_CHART"
-  NEREIDFORGE_RESOLVED_VERSION="$(helm show chart "$NEREIDFORGE_BACKEND_CHART" | awk '/^version:/ {print $2; exit}')"
-  for chart in "$NEREIDFORGE_FRONTEND_CHART" "$NEREIDFORGE_ML_BACKEND_CHART"; do
+  NEREIDFORGE_RESOLVED_VERSION="$(helm show chart "$NEREIDFORGE_APP_CHART" | awk '/^version:/ {print $2; exit}')"
+  for chart in "$NEREIDFORGE_ML_BACKEND_CHART"; do
     test "$(helm show chart "$chart" | awk '/^version:/ {print $2; exit}')" = \
       "$NEREIDFORGE_RESOLVED_VERSION"
   done
@@ -1075,11 +1074,7 @@ path. The resolved version is persisted for the later acceptance stage.
   chmod 600 "$PRE_RELEASE_DIR/nf-resolved-version-$NEREIDFORGE_VERSION.txt"
   bash "$PRE_ROOT/scripts/40_check-nf-handoff.sh"
 
-  helm upgrade --install nereidforge-backend "$NEREIDFORGE_BACKEND_CHART" \
-    --namespace nereidforge \
-    -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
-    --wait --timeout 10m
-  helm upgrade --install nereidforge-frontend "$NEREIDFORGE_FRONTEND_CHART" \
+  helm upgrade --install nereidforge "$NEREIDFORGE_APP_CHART" \
     --namespace nereidforge \
     -f "$NF_VALUES_FILE" -f "$NF_OPERATOR_VALUES_FILE" \
     --wait --timeout 10m
@@ -1096,10 +1091,13 @@ continue with an empty archive variable; return to §7.1 and complete the NF
 artifact gate instead.
 
 Do not add `--create-namespace`; pre owns that namespace and the handoff
-prevents Helm from adopting it. The backend post-install/post-upgrade hooks
+prevents Helm from adopting it (`namespace.create: false` in the generated
+values). The single consolidated `nereidforge` release runs the API, worker,
+and embedded SPA frontend Deployments while preserving every live object name
+through the chart's nameOverride pins. Its post-install/post-upgrade hooks
 seed the administrator without implicit password rotation and synchronize the
 existing KFP pipeline definitions. A failed hook fails the Helm operation. Do
-not continue to frontend or ML backend after a backend failure.
+not continue to the ML backend after the consolidated release fails.
 
 ### 7.5 Final NF acceptance and Link handoff
 

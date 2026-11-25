@@ -195,7 +195,7 @@ SSO is unhealthy.
 development snapshot is available. The anonymously verified pre installer and
 five supporting charts permit pre-only §7.2. Before NF §§7.3–7.5, separately
 verify the selected NF profile (23 `full` images or 18 `cpu-xpu` images with
-Intel XPU retained) and four NF charts, and record the profile, each resolved
+Intel XPU retained) and three NF charts, and record the profile, each resolved
 immutable version, and source commit. Missing NF evidence stops that later stage, not the
 independent pre installation; live Forge acceptance remains mandatory before
 Link.

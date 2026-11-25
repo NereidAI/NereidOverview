@@ -516,7 +516,7 @@ class ChartHelperTest(unittest.TestCase):
 set -euo pipefail
 if [[ "$1" == show && "$2" == chart ]]; then
   version="$(awk '/^version:/ {print $2; exit}' "$3")"
-  printf 'name: nereidforge-backend\\nversion: %s\\nappVersion: "%s"\\n' "$version" "$version"
+  printf 'name: nereidforge\\nversion: %s\\nappVersion: "%s"\\n' "$version" "$version"
 else
   echo "unexpected fake helm command (floating pulls are forbidden): $*" >&2
   exit 2
@@ -572,7 +572,7 @@ fi
 set -euo pipefail
 DEPLOYMENT_ROOT={shlex.quote(str(deployment))}
 source {shlex.quote(str(LOADER))}
-pull_nereid_chart nereidforge-backend {shlex.quote(selector)}
+pull_nereid_chart nereidforge {shlex.quote(selector)}
 """
         environment = self.chart_environment(
             deployment, fake_bin, registry, digest, layer_digest, overrides
@@ -595,9 +595,9 @@ pull_nereid_chart nereidforge-backend {shlex.quote(selector)}
                 deployment, fake_bin, registry, DIGEST, layer_digest, selector="0.0.1"
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            archive = deployment / "chart-archives" / "nereidforge-backend-0.0.1.tgz"
+            archive = deployment / "chart-archives" / "nereidforge-0.0.1.tgz"
             self.assertTrue(archive.is_file())
-            evidence = deployment / "deploy-logs" / "nereidforge-backend"
+            evidence = deployment / "deploy-logs" / "nereidforge"
             self.assertEqual(
                 (evidence / "chart-resolved-version.txt").read_text().strip(), "0.0.1"
             )
@@ -658,7 +658,7 @@ pull_nereid_chart nereidforge-backend {shlex.quote(selector)}
                 deployment, fake_bin, registry, DIGEST, layer_digest, overrides={"FAKE_FAIL_BLOB": "1"}
             )
             self.assertNotEqual(interrupted.returncode, 0)
-            evidence = deployment / "deploy-logs" / "nereidforge-backend"
+            evidence = deployment / "deploy-logs" / "nereidforge"
             self.assertIn(DIGEST, (evidence / "chart-digest-intent-0.0.0-dev.txt").read_text())
             self.assertFalse((evidence / "chart-complete-0.0.0-dev.env").exists())
 
@@ -675,9 +675,9 @@ pull_nereid_chart nereidforge-backend {shlex.quote(selector)}
             self.assertEqual(sum(line.startswith("resolve ") for line in calls), 1)
             self.assertTrue(all(DIGEST in line for line in calls if line.startswith("manifest ")))
             self.assertTrue(all(layer_digest in line for line in calls if line.startswith("blob ")))
-            archive = deployment / "chart-archives" / f"nereidforge-backend-{VERSION}.tgz"
+            archive = deployment / "chart-archives" / f"nereidforge-{VERSION}.tgz"
             self.assertEqual(resumed.stdout.strip(), str(archive))
-            self.assertFalse((deployment / "chart-archives" / f"nereidforge-backend-{SECOND_VERSION}.tgz").exists())
+            self.assertFalse((deployment / "chart-archives" / f"nereidforge-{SECOND_VERSION}.tgz").exists())
 
     def test_completed_chart_before_suite_lock_does_not_resolve_again(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -704,7 +704,7 @@ source {shlex.quote(str(LOADER))}
 source {shlex.quote(str(RUNNER))}
 source {shlex.quote(str(ARTIFACTS))}
 QUICK_ARTIFACT_LOCK_DIR={shlex.quote(str(locks))}
-suite_pull_chart_frozen nereidforge-backend 0.0.0-dev
+suite_pull_chart_frozen nereidforge 0.0.0-dev
 """
             environment = self.chart_environment(
                 deployment,
@@ -718,7 +718,7 @@ suite_pull_chart_frozen nereidforge-backend 0.0.0-dev
             self.assertEqual(locked.returncode, 0, locked.stdout + locked.stderr)
             self.assertEqual(locked.stdout.strip(), first.stdout.strip())
             self.assertEqual((deployment / "oras-calls").read_bytes(), calls_after_artifact)
-            self.assertTrue((locks / "chart-nereidforge-backend-0.0.0-dev.lock").is_file())
+            self.assertTrue((locks / "chart-nereidforge-0.0.0-dev.lock").is_file())
 
     def test_chart_archive_without_completion_is_reused_by_layer_digest(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -734,7 +734,7 @@ suite_pull_chart_frozen nereidforge-backend 0.0.0-dev
             layer_digest = self.make_chart_registry(registry)
             first = self.pull_chart(deployment, fake_bin, registry, DIGEST, layer_digest)
             self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-            evidence = deployment / "deploy-logs" / "nereidforge-backend"
+            evidence = deployment / "deploy-logs" / "nereidforge"
             (evidence / "chart-complete-0.0.0-dev.env").unlink()
 
             recovered = self.pull_chart(
@@ -825,7 +825,7 @@ suite_pull_chart_frozen nereidforge-backend 0.0.0-dev
             layer_digest = self.make_chart_registry(registry)
             first = self.pull_chart(deployment, fake_bin, registry, DIGEST, layer_digest)
             self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-            evidence = deployment / "deploy-logs" / "nereidforge-backend"
+            evidence = deployment / "deploy-logs" / "nereidforge"
             (evidence / "chart-digest-intent-0.0.0-dev.txt").unlink()
             complete = evidence / "chart-complete-0.0.0-dev.env"
             retained = complete.read_bytes()
@@ -854,7 +854,7 @@ suite_pull_chart_frozen nereidforge-backend 0.0.0-dev
                 deployment, fake_bin, registry, DIGEST, layer_digest, overrides={"FAKE_FAIL_BLOB": "1"}
             )
             self.assertNotEqual(interrupted.returncode, 0)
-            evidence = deployment / "deploy-logs" / "nereidforge-backend" / "chart-digest.txt"
+            evidence = deployment / "deploy-logs" / "nereidforge" / "chart-digest.txt"
             evidence.write_text(SECOND_DIGEST + "\n")
             calls = (deployment / "oras-calls").read_bytes()
 

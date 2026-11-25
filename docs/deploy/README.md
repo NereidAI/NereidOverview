@@ -12,7 +12,7 @@ independent procedure that preserves the same contracts.
 > their resolved versions and digests. Forge uses independent development gates
 > in §7: the verified pre installer and five supporting charts permit pre-only
 > §7.2, while the selected NF profile (23 `full` images or 18 `cpu-xpu` images,
-> including Intel XPU) and four NF charts are additionally required for NF
+> including Intel XPU) and three NF charts are additionally required for NF
 > §§7.3–7.5. Stop between those stages whenever the NF evidence is absent.
 > Never install Link without accepted Forge and healthy Forge SeaweedFS.
 
