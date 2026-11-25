@@ -266,11 +266,12 @@ chart's `<release>-config-secret` contains sensitive configuration in
 | HTTPS health | `https://nereidlink.example.org/healthz` |
 | MQTT Service | `nereidlink-mqtt`; NodePorts `31883` → 1883 and `31884` → 8883 |
 | Edge topic family | `v1/gateway/*` |
-| Initial account | `<link-admin-email>` with a strong first-run password stored in the vault |
+| Initial account | `admin@nereidai.local` with a strong first-run password retained in `$DEPLOY_VALUES_ROOT/nereidlink/admin-credentials.env` and stored in the vault |
 
 NereidEdge initiates the northbound connection to Link; Link has no outbound edge
-address to configure. Complete the documented first-run account bootstrap without
-printing the generated credential.
+address to configure. The first-run account bootstrap is completed through the
+one-time loopback API without printing the generated credential; the bootstrap
+API is never called again once `bootstrap-status` reports `required=false`.
 
 Link's init containers create a Link-owned device CA at
 `/var/lib/nereidlink/pki/ca.pem` and sign the MQTT server leaf from

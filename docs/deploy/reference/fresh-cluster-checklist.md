@@ -179,8 +179,11 @@ the exact first-installation endpoint and credentials are not recorded.
       matching Sphere `link` secret, callback `/auth/ns-callback`, and the
       `nereid-internal-ca-tls` / `ca.crt` trust reference.
 - [ ] Install release `nereidlink` in namespace `nereidlink`, expose
-      `https://nereidlink.example.org` with TLS, and complete the documented first-run
-      admin bootstrap with a strong password stored in the encrypted vault.
+      `https://nereidlink.example.org` with TLS, and complete the first-run admin
+      bootstrap through the one-time loopback API (the quick installer's `link`
+      stage does this automatically). Store the retained mode-`0600`
+      `admin-credentials.env` password in the encrypted vault; an admin already
+      initialized out of band must not be reset.
 - [ ] Verify rollout and `https://nereidlink.example.org/healthz`. Confirm startup
       authenticates to Forge SeaweedFS and creates the `nereidlink` bucket
       idempotently; inspect logs and bucket state rather than assuming success.

@@ -350,6 +350,110 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertEqual(self.current_state(), "link=complete")
         self.assertTrue(self.marker("link").exists())
 
+    def link_admin_credentials(self):
+        return self.deployment / "deploy-values" / "nereidlink" / "admin-credentials.env"
+
+    def bootstrap_post_calls(self):
+        return [
+            line
+            for line in self.call_lines()
+            if "/v1/auth/bootstrap" in line and "\tPOST\t" in line
+        ]
+
+    def test_link_admin_bootstrap_creates_retained_private_credential(self):
+        self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
+        result = self.run_installer()
+
+        self.assertEqual(self.current_state(), "link=complete")
+        credentials = self.link_admin_credentials()
+        self.assertTrue(credentials.exists())
+        self.assertEqual(stat.S_IMODE(credentials.stat().st_mode), 0o600)
+        lines = credentials.read_text().splitlines()
+        self.assertIn("LINK_ADMIN_EMAIL=admin@nereidai.local", lines)
+        password = next(
+            line.removeprefix("LINK_ADMIN_PASSWORD=")
+            for line in lines
+            if line.startswith("LINK_ADMIN_PASSWORD=")
+        )
+        self.assertRegex(password, r"^[0-9a-f]{48}$")
+        self.assertFalse(self.read_cluster().get("link_bootstrap_required", True))
+        self.assertEqual(len(self.bootstrap_post_calls()), 1)
+        self.assertTrue(any(
+            "/v1/auth/bootstrap-status" in line for line in self.call_lines()
+        ))
+        log = (self.deployment / "deploy-logs" / "quick-install" / "link.log").read_text()
+        for secret in (password, "fake-access-token", "fake-refresh-token"):
+            self.assertNotIn(secret, result.stdout + result.stderr)
+            self.assertNotIn(secret, log)
+            self.assertNotIn(secret, self.calls.read_text())
+
+    def test_link_admin_bootstrap_never_resets_existing_administrator(self):
+        self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
+        state = self.read_cluster()
+        state["link_bootstrap_required"] = False
+        self.write_cluster(state)
+
+        self.run_installer()
+        self.assertEqual(self.current_state(), "link=complete")
+        self.assertEqual(self.bootstrap_post_calls(), [])
+        self.assertFalse(self.link_admin_credentials().exists())
+
+        # A credential retained from an earlier installer bootstrap must survive
+        # resume/re-run untouched; the verifier path must not POST either.
+        credentials = self.link_admin_credentials()
+        original = (
+            "# NereidLink built-in platform admin; save securely and never commit.\n"
+            "LINK_ADMIN_EMAIL=admin@nereidai.local\n"
+            "LINK_ADMIN_PASSWORD=" + "a" * 48 + "\n"
+        )
+        credentials.write_text(original, encoding="utf-8")
+        credentials.chmod(0o600)
+
+        self.run_installer()
+        self.assertEqual(self.current_state(), "link=complete")
+        self.assertEqual(self.bootstrap_post_calls(), [])
+        self.assertEqual(credentials.read_text(), original)
+        self.assertEqual(stat.S_IMODE(credentials.stat().st_mode), 0o600)
+
+    def test_link_admin_bootstrap_post_failure_fails_closed(self):
+        self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
+        self.run_installer(expected=1, environment={
+            "FAKE_LINK_BOOTSTRAP_FAIL": "yes",
+            "LINK_API_READY_ATTEMPTS": "3",
+            "LINK_API_RETRY_DELAY": "0",
+        })
+
+        self.assertEqual(self.current_state(), "link=failed")
+        self.assertFalse(self.marker("link").exists())
+        self.assertFalse(self.link_admin_credentials().exists())
+        self.assertTrue(self.read_cluster().get("link_bootstrap_required", True))
+
+    def test_link_admin_bootstrap_requires_reachable_status_endpoint(self):
+        self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
+        self.run_installer(expected=1, environment={
+            "FAKE_LINK_API_UNREACHABLE": "yes",
+            "LINK_API_READY_ATTEMPTS": "3",
+            "LINK_API_RETRY_DELAY": "0",
+        })
+
+        self.assertEqual(self.current_state(), "link=failed")
+        self.assertFalse(self.marker("link").exists())
+        self.assertFalse(self.link_admin_credentials().exists())
+        self.assertEqual(self.bootstrap_post_calls(), [])
+
+    def test_link_stage_fails_when_bootstrap_remains_required(self):
+        self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
+        self.run_installer(expected=1, environment={
+            "FAKE_LINK_BOOTSTRAP_STICKY": "yes",
+            "LINK_API_READY_ATTEMPTS": "3",
+            "LINK_API_RETRY_DELAY": "0",
+        })
+
+        self.assertEqual(self.current_state(), "link=failed")
+        self.assertFalse(self.marker("link").exists())
+        log = (self.deployment / "deploy-logs" / "quick-install" / "link.log").read_text()
+        self.assertIn("bootstrap is still required", log)
+
     def test_incomplete_secret_store_fails_closed_without_replacement(self):
         self.write_config(SPHERE_SSO_ACCEPTANCE_CONFIRMED="no")
         self.run_installer(expected=20)

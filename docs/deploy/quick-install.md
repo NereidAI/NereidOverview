@@ -261,6 +261,7 @@ reproducible copy is still sensitive.
 | `$NF_SECRET_DIR/runtime-secret-patch.json` | NF JWT and Forge SSO secret in `stringData`. Regenerated patch input, not an independent source of truth. |
 | `$PRE_HANDOFF_DIR/admin-credentials.env` | Optional legacy `NF_ADMIN_PASSWORD` input read by the NF verifier when present. The quick application-only path does not create it; its NF administrator file is `$NF_SECRET_DIR/admin-password`. |
 | `$PRE_HANDOFF_DIR/seaweedfs-credentials.yaml` | Exactly `accessKey` and `secretKey` for Link's Forge S3 access. Generated after NF acceptance from canonical `nereidforge/seaweedfs-s3-credentials` and verified against it on resume. |
+| `$DEPLOY_VALUES_ROOT/nereidlink/admin-credentials.env` | `LINK_ADMIN_EMAIL` (`admin@nereidai.local`) and a strong random `LINK_ADMIN_PASSWORD` (48 hex characters). Created only when the installer itself completes Link's one-time first-run bootstrap through the loopback API. Absent when the administrator was already initialized out of band (for example through the web UI); in that case the existing password is never reset and no replacement credential is written. |
 | `$DEPLOYMENT_ROOT/quick-install/kubeconfig` | Minified, flattened cluster kubeconfig pinned to `KUBECONTEXT`; may contain a client private key, token, client certificate, or exec-credential configuration. |
 | `${KUBECONFIG:-$HOME/.kube/config}` | Operator-supplied source kubeconfig(s), including every non-empty colon-separated component. The example uses `$HOME/.kube/nereidai.kubeconfig`; quick-install reads but does not create this source. |
 
@@ -360,10 +361,12 @@ public artifact.
 ## 5. Finish acceptance separately
 
 A successful final stage means the central Link installation passed its
-programmatic gates. It does not replace the
+programmatic gates, including completion of the one-time platform administrator
+bootstrap (verified through `GET /v1/auth/bootstrap-status` reporting
+`required=false`). It does not replace the
 [fresh-cluster checklist](reference/fresh-cluster-checklist.md). Complete the
-remaining browser, Link bucket/restart, administrator bootstrap, license,
-MQTT/edge, Open Horizon agreement, and independent ESS delivery checks through
-their owning interfaces. Those operations remain valid whether installation was
-performed manually, with this convenience runner, or with entirely different
-operator tooling.
+remaining browser, Link bucket/restart, license, MQTT/edge, Open Horizon
+agreement, and independent ESS delivery checks through their owning interfaces,
+and store the retained `admin-credentials.env` password in the site vault. Those
+operations remain valid whether installation was performed manually, with this
+convenience runner, or with entirely different operator tooling.

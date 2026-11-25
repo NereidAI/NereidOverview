@@ -635,6 +635,14 @@ def run_kubectl(raw_args):
             if fmt.startswith("{.metadata.labels."):
                 print(owners[kind], end="")
             return 0
+        if (
+            namespace == "nereidlink"
+            and kind in {"pod", "pods"}
+            and any(arg == "-l" or arg.startswith("--selector") or arg.startswith("-l=") for arg in args)
+        ):
+            if fmt.startswith("{.items[0].metadata.name}"):
+                print("nereidlink-current-pod", end="")
+                return 0
         if namespace == "nereidlink" and kind == "deployment" and name == "nereidlink" and fmt == "json":
             deployment, _, _ = link_workloads()
             print(json.dumps(deployment))
@@ -692,7 +700,7 @@ def run_kubectl(raw_args):
         values.update(patch.get("stringData", {}))
         save_state(state)
         return 0
-    if command in {"rollout", "wait"}:
+    if command in {"rollout", "wait", "port-forward"}:
         return 0
     if command == "delete":
         if args[1] in {"pvc", "pod"}:
@@ -707,6 +715,50 @@ def run_kubectl(raw_args):
         return 0
     print(f"unsupported fake kubectl command: {raw_args}", file=sys.stderr)
     return 2
+
+
+def run_curl(args):
+    url = next((arg for arg in args if arg.startswith(("http://", "https://"))), "")
+    output = option(args, "-o") or option(args, "--output")
+    if "127.0.0.1" in url:
+        if os.environ.get("FAKE_LINK_API_UNREACHABLE") == "yes":
+            print("simulated local API connection refusal", file=sys.stderr)
+            return 7
+        if url.endswith("/healthz"):
+            body = "{}"
+        elif url.endswith("/v1/auth/bootstrap-status"):
+            state = load_state()
+            body = json.dumps({
+                "required": state.get("link_bootstrap_required", True),
+                "email": "admin@nereidai.local",
+            })
+        elif url.endswith("/v1/auth/bootstrap") and option(args, "-X") == "POST":
+            if "--data-binary" in args and "@-" in args:
+                # Drain the password body without recording it anywhere.
+                sys.stdin.read()
+            if os.environ.get("FAKE_LINK_BOOTSTRAP_FAIL") == "yes":
+                print("simulated bootstrap API failure", file=sys.stderr)
+                return 1
+            state = load_state()
+            state["link_bootstrap_posts"] = state.get("link_bootstrap_posts", 0) + 1
+            if os.environ.get("FAKE_LINK_BOOTSTRAP_STICKY") != "yes":
+                state["link_bootstrap_required"] = False
+            save_state(state)
+            body = json.dumps({
+                "access_token": "fake-access-token",
+                "refresh_token": "fake-refresh-token",
+                "token_type": "bearer",
+            })
+        else:
+            print(f"unsupported fake local curl target: {url}", file=sys.stderr)
+            return 2
+    else:
+        body = "{}"
+    if output:
+        Path(output).write_text(body + "\n", encoding="utf-8")
+    else:
+        print(body)
+    return 0
 
 
 def write_verifier_checkout(destination):
@@ -764,8 +816,7 @@ def main():
     if tool == "git":
         return run_git(args)
     if tool == "curl":
-        print("{}")
-        return 0
+        return run_curl(args)
     if tool == "getent":
         return 0
     if tool == "openssl":
