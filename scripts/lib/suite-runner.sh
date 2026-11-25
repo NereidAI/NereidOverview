@@ -310,6 +310,11 @@ suite_bind_cluster() {
 suite_print_status() {
     local stage marker saved fingerprint
     SUITE_PREVIOUS_FINGERPRINT=""
+    if [[ "${SUITE_VERSION_CHANNEL:-dev}" == "dev" ]]; then
+        printf 'Suite version channel: dev (rolling 0.0.0-dev matrix)\n'
+    else
+        printf 'Suite release: v%s (pinned product matrix)\n' "$SUITE_VERSION_CHANNEL"
+    fi
     if [[ -f "$SUITE_STATE_DIR/current" ]]; then
         printf 'Last recorded state: %s\n' "$(cat "$SUITE_STATE_DIR/current")"
     else

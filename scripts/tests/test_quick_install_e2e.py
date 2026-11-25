@@ -454,6 +454,33 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         log = (self.deployment / "deploy-logs" / "quick-install" / "link.log").read_text()
         self.assertIn("bootstrap is still required", log)
 
+    def test_deployment_env_version_overrides_the_suite_matrix_default(self):
+        # The dev-channel matrix defaults every selector to 0.0.0-dev; an
+        # explicit deployment.env value must still win for a verified exception.
+        self.write_config(
+            NF_LIVE_ACCEPTANCE_CONFIRMED="yes",
+            NEREIDLINK_VERSION="0.0.0-dev-abc1234",
+        )
+
+        self.run_installer()
+
+        self.assertEqual(self.current_state(), "link=complete")
+        lock = (
+            self.deployment
+            / "quick-install"
+            / "artifact-locks"
+            / "chart-nereidlink-0.0.0-dev-abc1234.lock"
+        )
+        self.assertTrue(lock.exists())
+        self.assertFalse(
+            (
+                self.deployment
+                / "quick-install"
+                / "artifact-locks"
+                / "chart-nereidlink-0.0.0-dev.lock"
+            ).exists()
+        )
+
     def test_incomplete_secret_store_fails_closed_without_replacement(self):
         self.write_config(SPHERE_SSO_ACCEPTANCE_CONFIRMED="no")
         self.run_installer(expected=20)

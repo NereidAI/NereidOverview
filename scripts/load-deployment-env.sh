@@ -136,6 +136,22 @@ if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
 PY
 }
 
+# Chart version shapes. The development channel uses the floating 0.0.0-dev
+# selector, always resolved to an immutable 0.0.0-dev-<sha7> chart, while a
+# suite release selects a bare SemVer chart. Resolved versions are always
+# pinned, never the floating tag.
+_NEREID_DEV_CHART_SELECTOR_RE='^0\.0\.0-dev(-[0-9a-f]{7})?$'
+_NEREID_DEV_CHART_VERSION_RE='^0\.0\.0-dev-[0-9a-f]{7}$'
+_NEREID_RELEASE_CHART_RE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'
+
+_nereid_is_supported_chart_selector() {
+    [[ "$1" =~ $_NEREID_DEV_CHART_SELECTOR_RE || "$1" =~ $_NEREID_RELEASE_CHART_RE ]]
+}
+
+_nereid_is_supported_resolved_chart_version() {
+    [[ "$1" =~ $_NEREID_DEV_CHART_VERSION_RE || "$1" =~ $_NEREID_RELEASE_CHART_RE ]]
+}
+
 # Resolve a chart selector once. The OCI manifest and chart blob are retrieved
 # by digest, so neither an initial pull nor an interrupted pull can follow a
 # moved floating tag. Completion evidence avoids all registry calls on rerun.
@@ -151,8 +167,8 @@ pull_nereid_chart() (
         echo "Invalid chart product name: $product" >&2
         return 2
     }
-    [[ "$selector" =~ ^0\.0\.0-dev(-[0-9a-f]{7})?$ ]] || {
-        echo "Expected a development chart selector, got: $selector" >&2
+    _nereid_is_supported_chart_selector "$selector" || {
+        echo "Expected a development or release chart selector, got: $selector" >&2
         return 2
     }
     install -d -m 700 "$DEPLOY_LOG_ROOT/$product" "$DEPLOYMENT_ROOT/chart-archives"
@@ -179,7 +195,7 @@ pull_nereid_chart() (
             return 1
         }
         resolved_version="$COMPLETE_RESOLVED_VERSION"
-        [[ "$resolved_version" =~ ^0\.0\.0-dev-[0-9a-f]{7}$ ]] \
+        _nereid_is_supported_resolved_chart_version "$resolved_version" \
             && [[ "$selector" == "0.0.0-dev" || "$resolved_version" == "$selector" ]] \
             && [[ "$COMPLETE_LAYER_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
             && [[ "$COMPLETE_ARCHIVE_SHA256" == "${COMPLETE_LAYER_DIGEST#sha256:}" ]] || {
@@ -234,7 +250,7 @@ PY
     while IFS= read -r -d '' candidate; do
         [[ "$(sha256sum "$candidate" | awk '{print $1}')" == "${layer_digest#sha256:}" ]] || continue
         candidate_version="$(helm show chart "$candidate" | awk '/^version:/ {print $2; exit}' | tr -d '"')"
-        [[ "$candidate_version" =~ ^0\.0\.0-dev-[0-9a-f]{7}$ ]] \
+        _nereid_is_supported_resolved_chart_version "$candidate_version" \
             && [[ "$selector" == "0.0.0-dev" || "$candidate_version" == "$selector" ]] || {
             echo "Recovered chart has an invalid version or selector: $candidate" >&2
             return 1
@@ -247,7 +263,7 @@ PY
         archive="$candidate"
         resolved_version="$candidate_version"
     done < <(find "$DEPLOYMENT_ROOT/chart-archives" -maxdepth 1 -type f \
-        -name "$product-0.0.0-dev-*.tgz" -print0)
+        -name "$product-*.tgz" -print0)
 
     if [[ -z "$archive" ]]; then
         archive="$pull_dir/$product.tgz"
@@ -261,8 +277,8 @@ PY
         }
         helm show chart "$archive" | tee "$DEPLOY_LOG_ROOT/$product/chart-metadata.txt" >&2
         resolved_version="$(helm show chart "$archive" | awk '/^version:/ {print $2; exit}' | tr -d '"')"
-        [[ "$resolved_version" =~ ^0\.0\.0-dev-[0-9a-f]{7}$ ]] || {
-            echo "Chart did not retain an immutable development version: $product:$resolved_version" >&2
+        _nereid_is_supported_resolved_chart_version "$resolved_version" || {
+            echo "Chart did not retain a supported immutable version: $product:$resolved_version" >&2
             return 1
         }
         [[ "$selector" == "0.0.0-dev" || "$resolved_version" == "$selector" ]] || {

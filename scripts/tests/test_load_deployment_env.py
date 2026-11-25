@@ -579,6 +579,50 @@ pull_nereid_chart nereidforge-backend {shlex.quote(selector)}
         )
         return run_bash(script, environment)
 
+    def test_release_selector_pulls_a_bare_semver_chart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry, version="0.0.1")
+            result = self.pull_chart(
+                deployment, fake_bin, registry, DIGEST, layer_digest, selector="0.0.1"
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            archive = deployment / "chart-archives" / "nereidforge-backend-0.0.1.tgz"
+            self.assertTrue(archive.is_file())
+            evidence = deployment / "deploy-logs" / "nereidforge-backend"
+            self.assertEqual(
+                (evidence / "chart-resolved-version.txt").read_text().strip(), "0.0.1"
+            )
+
+    def test_unsupported_selector_shape_is_rejected_before_registry_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry)
+            result = self.pull_chart(
+                deployment, fake_bin, registry, DIGEST, layer_digest, selector="latest"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("development or release chart selector", result.stderr)
+            calls = deployment / "oras-calls"
+            if calls.exists():
+                self.assertEqual(calls.read_text(), "")
+
     def test_immutable_selector_must_match_the_archive_version(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

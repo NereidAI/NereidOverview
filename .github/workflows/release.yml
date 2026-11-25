@@ -1,0 +1,34 @@
+# Copyright (C) 2026 YIQISOFT
+# SPDX-License-Identifier: Apache-2.0
+
+# Suite release gate. NereidOverview publishes no images or charts; a release
+# is a v* tag whose commit carries a matching pinned product matrix in
+# deploy/suite-versions.yaml. This job fails the tag when the matrix entry is
+# missing or malformed, so an installer checked out at that tag can never
+# resolve to an unverified product combination.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  version-matrix:
+    name: Validate suite release version matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Resolve and validate the tagged product matrix
+        run: |
+          python3 -m pip install --quiet pyyaml
+          VERSION="${GITHUB_REF_NAME#v}"
+          python3 scripts/lib/suite_versions.py \
+            --manifest deploy/suite-versions.yaml \
+            --channel "$VERSION"
