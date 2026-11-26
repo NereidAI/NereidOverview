@@ -722,7 +722,22 @@ def run_kubectl(raw_args):
         values.update(patch.get("stringData", {}))
         save_state(state)
         return 0
-    if command in {"rollout", "wait", "port-forward"}:
+    if command in {"rollout", "wait"}:
+        return 0
+    if command == "port-forward":
+        if os.environ.get("FAKE_LINK_PORTFORWARD_FAIL") == "yes":
+            print(
+                "Unable to listen on port 18081: listen tcp 127.0.0.1:18081: "
+                "bind: address already in use",
+                file=sys.stderr,
+            )
+            return 1
+        spec = next((arg for arg in args if arg.endswith(":8080")), ":8080")
+        if spec in {":8080", "0:8080"} or spec.endswith(":0:8080"):
+            local_port = "38081"
+        else:
+            local_port = spec.rsplit(":", 1)[0].split(":")[-1]
+        print(f"Forwarding from 127.0.0.1:{local_port} -> 8080")
         return 0
     if command == "delete":
         if args[1] in {"pvc", "pod"}:

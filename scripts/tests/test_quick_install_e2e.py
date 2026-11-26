@@ -420,7 +420,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.run_installer(expected=1, environment={
             "FAKE_LINK_BOOTSTRAP_FAIL": "yes",
             "LINK_API_READY_ATTEMPTS": "3",
-            "LINK_API_RETRY_DELAY": "0",
+            "LINK_API_RETRY_DELAY": "0.1",
         })
 
         self.assertEqual(self.current_state(), "link=failed")
@@ -433,7 +433,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.run_installer(expected=1, environment={
             "FAKE_LINK_API_UNREACHABLE": "yes",
             "LINK_API_READY_ATTEMPTS": "3",
-            "LINK_API_RETRY_DELAY": "0",
+            "LINK_API_RETRY_DELAY": "0.1",
         })
 
         self.assertEqual(self.current_state(), "link=failed")
@@ -446,7 +446,7 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.run_installer(expected=1, environment={
             "FAKE_LINK_BOOTSTRAP_STICKY": "yes",
             "LINK_API_READY_ATTEMPTS": "3",
-            "LINK_API_RETRY_DELAY": "0",
+            "LINK_API_RETRY_DELAY": "0.1",
         })
 
         self.assertEqual(self.current_state(), "link=failed")
@@ -480,6 +480,54 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
                 / "chart-nereidlink-0.0.0-dev.lock"
             ).exists()
         )
+
+    def port_forward_calls(self):
+        return [
+            line.split("\t")
+            for line in self.call_lines()
+            if "port-forward" in line and "nereidlink" in line
+        ]
+
+    def test_link_api_forward_uses_ephemeral_local_port_by_default(self):
+        self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
+        self.run_installer()
+
+        self.assertEqual(self.current_state(), "link=complete")
+        specs = [call[-1] for call in self.port_forward_calls()]
+        self.assertTrue(specs)
+        for spec in specs:
+            # An empty local port lets the kernel choose one, so a busy host
+            # port (for example a developer service on 18081) cannot break it.
+            self.assertEqual(spec, ":8080")
+        self.assertFalse(any("18081" in " ".join(call) for call in self.port_forward_calls()))
+
+    def test_link_api_forward_honors_fixed_port_override(self):
+        self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
+        self.run_installer(environment={"LINK_LOCAL_HTTP_PORT": "18099"})
+
+        self.assertEqual(self.current_state(), "link=complete")
+        specs = {call[-1] for call in self.port_forward_calls()}
+        self.assertEqual(specs, {"18099:8080"})
+
+    def test_link_api_forward_failure_preserves_private_diagnostic_log(self):
+        self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
+        self.run_installer(expected=1, environment={
+            "FAKE_LINK_PORTFORWARD_FAIL": "yes",
+            "LINK_API_READY_ATTEMPTS": "5",
+            # A small positive delay lets the fake kubectl process emit its
+            # bind error; a zero-delay loop can outrun interpreter startup.
+            "LINK_API_RETRY_DELAY": "0.1",
+        })
+
+        self.assertEqual(self.current_state(), "link=failed")
+        self.assertFalse(self.marker("link").exists())
+        self.assertFalse(self.link_admin_credentials().exists())
+        diagnostic = (
+            self.deployment / "deploy-logs" / "nereidlink" / "api-port-forward.log"
+        )
+        self.assertTrue(diagnostic.exists())
+        self.assertEqual(stat.S_IMODE(diagnostic.stat().st_mode), 0o600)
+        self.assertIn("address already in use", diagnostic.read_text())
 
     def test_incomplete_secret_store_fails_closed_without_replacement(self):
         self.write_config(SPHERE_SSO_ACCEPTANCE_CONFIRMED="no")
