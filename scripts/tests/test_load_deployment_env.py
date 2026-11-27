@@ -838,6 +838,120 @@ suite_pull_chart_frozen nereidforge 0.0.0-dev
             self.assertEqual((deployment / "oras-calls").read_bytes(), calls)
             self.assertEqual(complete.read_bytes(), retained)
 
+    def test_floating_bare_version_chart_is_accepted_and_frozen_by_digest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            layer_digest = self.make_chart_registry(registry, version="0.0.0-dev")
+
+            result = self.pull_chart(
+                deployment, fake_bin, registry, DIGEST, layer_digest
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            archive = deployment / "chart-archives" / "nereidforge-0.0.0-dev.tgz"
+            self.assertTrue(archive.is_file())
+            evidence = deployment / "deploy-logs" / "nereidforge"
+            self.assertEqual(
+                (evidence / "chart-resolved-version.txt").read_text().strip(),
+                "0.0.0-dev",
+            )
+            self.assertTrue((evidence / "chart-complete-0.0.0-dev.env").is_file())
+            calls_after_first = (deployment / "oras-calls").read_bytes()
+
+            # A rerun reuses the frozen digest and archive without resolving.
+            rerun = self.pull_chart(
+                deployment,
+                fake_bin,
+                registry,
+                SECOND_DIGEST,
+                layer_digest,
+                overrides={"FAKE_RESOLVE_DIGEST": SECOND_DIGEST},
+            )
+            self.assertEqual(rerun.returncode, 0, rerun.stdout + rerun.stderr)
+            self.assertEqual(rerun.stdout.strip(), str(archive))
+            self.assertEqual((deployment / "oras-calls").read_bytes(), calls_after_first)
+
+    def test_floating_chart_generation_conflict_fails_closed_until_state_is_cleared(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            deployment = root / "deployment"
+            registry = root / "registry"
+            fake_bin.mkdir()
+            deployment.mkdir()
+            make_oras(fake_bin)
+            self.make_helm(fake_bin)
+            self.make_environment(deployment)
+            first_layer = self.make_chart_registry(registry, version="0.0.0-dev")
+            first = self.pull_chart(deployment, fake_bin, registry, DIGEST, first_layer)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            archive = deployment / "chart-archives" / "nereidforge-0.0.0-dev.tgz"
+            evidence = deployment / "deploy-logs" / "nereidforge"
+
+            # The registry tag moves to a new generation; the operator cleared
+            # the digest evidence to roll 0.0.0-dev forward but left the old
+            # bare-named archive in place. The new archive keeps the same bare
+            # Chart.yaml version with different payload bytes.
+            (registry / "chart-archive.tgz").write_text(
+                "version: 0.0.0-dev\n# second generation payload\n"
+            )
+            second_blob = registry / "chart-archive.tgz"
+            second_layer = "sha256:" + hashlib.sha256(second_blob.read_bytes()).hexdigest()
+            (registry / "chart-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "layers": [
+                            {
+                                "mediaType": "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+                                "digest": second_layer,
+                            }
+                        ]
+                    }
+                )
+            )
+            for name in (
+                "chart-digest-intent-0.0.0-dev.txt",
+                "chart-digest.txt",
+                "chart-complete-0.0.0-dev.env",
+                "chart-resolved-version.txt",
+            ):
+                (evidence / name).unlink()
+
+            conflict = self.pull_chart(
+                deployment, fake_bin, registry, SECOND_DIGEST, second_layer
+            )
+            self.assertNotEqual(conflict.returncode, 0)
+            self.assertIn(
+                "Floating chart archive already holds a different generation",
+                conflict.stderr,
+            )
+            self.assertIn("roll 0.0.0-dev forward", conflict.stderr)
+            self.assertTrue(archive.is_file())
+
+            # Removing the stale archive as instructed lets the new generation
+            # freeze under the same bare filename.
+            archive.unlink()
+            resumed = self.pull_chart(
+                deployment, fake_bin, registry, SECOND_DIGEST, second_layer
+            )
+            self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+            self.assertTrue(archive.is_file())
+            self.assertEqual(
+                hashlib.sha256(archive.read_bytes()).hexdigest(),
+                second_layer.removeprefix("sha256:"),
+            )
+            self.assertEqual(
+                (evidence / "chart-resolved-version.txt").read_text().strip(),
+                "0.0.0-dev",
+            )
+
     def test_chart_digest_evidence_mismatch_fails_closed_without_registry_calls(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

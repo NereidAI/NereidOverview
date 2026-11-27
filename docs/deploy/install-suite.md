@@ -37,22 +37,36 @@ The [dated evidence snapshot](reference/development-artifacts-2026-11-22.md)
 binds that verification to the exact resolved chart versions/digests and image
 index digests. It is historical evidence, not a per-commit installation pin.
 
-A floating chart tag aliases the latest successfully published immutable
-`0.0.0-dev-<short-sha>` OCI manifest. The downloaded archive retains that
-short-SHA chart `version` and `appVersion`, so its suite images use the same
-immutable snapshot. Third-party images retain their public upstream coordinates
+Two development chart identity contracts coexist behind the same `0.0.0-dev`
+selector. The non-Forge products and the pre-NereidForge installer publish an
+immutable `0.0.0-dev-<short-sha>` chart whose floating tag aliases that exact
+manifest; the downloaded archive retains the short-SHA `version` and
+`appVersion`. The three NereidForge charts instead keep the bare rolling
+`0.0.0-dev` identity inside `Chart.yaml` and reference only floating
+`0.0.0-dev` images: the single moving OCI tag rolls forward per publication,
+with a digest read-back and rollback on the publisher side. No development
+chart is ever bound to a short-sha identity; only a formal `v<SemVer>` tag
+pins a chart once. Third-party images retain their public upstream coordinates
 and pinned versions.
 
 The pre-NereidForge installer and NereidForge charts also use `0.0.0-dev`.
 Section 2 writes every selector to one persistent `deployment.env`; no per-shell
-version exports or per-commit edits are needed. Pre and NF resolve their floating
-selectors independently to immutable `0.0.0-dev-<short-sha>` artifacts.
+version exports or per-commit edits are needed. Both internal chart versions
+(bare `0.0.0-dev` and legacy `0.0.0-dev-<short-sha>`) remain supported; every
+resolution is frozen locally through its retained OCI digest intent and
+artifact lock, so a moved floating tag never changes a prepared deployment
+root. Pre and NF resolve their floating selectors independently.
 
 Record each resolved chart OCI digest and internal version, the running image
 IDs/digests, selected kubecontext, and installation date in the deployment
-hand-off. For deliberate reproduction, replace a floating selector in
-`deployment.env` with its resolved `0.0.0-dev-<short-sha>` version only after
-anonymously verifying that snapshot. Do not infer or invent release versions.
+hand-off. For deliberate reproduction of an immutable-contract product,
+replace a floating selector in `deployment.env` with its resolved
+`0.0.0-dev-<short-sha>` version only after anonymously verifying that
+snapshot. To deliberately roll a floating NereidForge chart forward, remove
+that product's artifact lock together with its digest intent, completion
+evidence, and the bare-named `chart-archives/<product>-0.0.0-dev.tgz`
+archive, then rerun the pull block; the next anonymous resolution freezes the
+new digest. Do not infer or invent release versions.
 
 ## 2. Operator environment
 
@@ -596,8 +610,9 @@ source-tree installation.
 
 Use the `PRE_VERSION=0.0.0-dev` and `NEREIDFORGE_VERSION=0.0.0-dev` selections
 already loaded from `deployment.env`. The two resolved versions are independent
-and need not match. Record each resolved `0.0.0-dev-<short-sha>` identity, OCI
-digest, and source commit.
+and need not match. Record each resolved internal version (a short-SHA
+`0.0.0-dev-<sha7>` identity, or the bare `0.0.0-dev` version of a floating
+NereidForge chart), OCI digest, and source commit where one exists.
 
 **Section 7.2 requires only the pre publication gate**:
 `pre-nereidforge-publish-dev` must have anonymously verified the ORAS pre
@@ -1113,23 +1128,36 @@ kubectl -n nereidforge get jobs,pods
 record_nereid_images nereidforge
 ```
 
-Run the NF fail-closed verifier from a verification-only checkout of the exact
-resolved development commit. This checkout supplies test tooling only; it is not
-an installation package and installs nothing:
+Run the NF fail-closed verifier from a verification-only checkout of an exact
+reviewed development commit. This checkout supplies test tooling only; it is
+not an installation package and installs nothing. A legacy immutable chart
+(resolved `0.0.0-dev-<sha7>`) names its own commit. A floating `0.0.0-dev`
+chart carries no source identity, so export the reviewed full NereidForge
+commit ID as `NF_VERIFIER_REF` first:
 
 ```bash
-NEREIDFORGE_SHORT_SHA="${NEREIDFORGE_RESOLVED_VERSION#0.0.0-dev-}"
-[[ "$NEREIDFORGE_SHORT_SHA" =~ ^[0-9a-f]{7}$ ]]
+if [[ "$NEREIDFORGE_RESOLVED_VERSION" =~ ^0\.0\.0-dev-[0-9a-f]{7}$ ]]; then
+  NEREIDFORGE_VERIFIER_REF="${NEREIDFORGE_RESOLVED_VERSION#0.0.0-dev-}"
+elif [[ "$NEREIDFORGE_RESOLVED_VERSION" == "0.0.0-dev" ]]; then
+  [[ -n "${NF_VERIFIER_REF:-}" && "$NF_VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]] || {
+    echo 'Set NF_VERIFIER_REF to the reviewed full NereidForge commit ID' >&2
+    exit 1
+  }
+  NEREIDFORGE_VERIFIER_REF="$NF_VERIFIER_REF"
+else
+  echo "Unsupported NereidForge resolved version: $NEREIDFORGE_RESOLVED_VERSION" >&2
+  exit 1
+fi
 NF_VERIFIER_DIR="$DEPLOYMENT_ROOT/verifiers/nereidforge-$NEREIDFORGE_RESOLVED_VERSION"
 install -d -m 700 "$DEPLOYMENT_ROOT/verifiers"
 prepare_nf_verifier_checkout() {
   local checkout="$1"
-  if ! git -C "$checkout" cat-file -e "${NEREIDFORGE_SHORT_SHA}^{commit}"; then
+  if ! git -C "$checkout" cat-file -e "${NEREIDFORGE_VERIFIER_REF}^{commit}"; then
     git -C "$checkout" fetch --filter=blob:none origin || return 1
   fi
-  git -C "$checkout" cat-file -e "${NEREIDFORGE_SHORT_SHA}^{commit}" || return 1
-  git -C "$checkout" checkout --detach "$NEREIDFORGE_SHORT_SHA" || return 1
-  [[ "$(git -C "$checkout" rev-parse HEAD)" == "$NEREIDFORGE_SHORT_SHA"* ]] || return 1
+  git -C "$checkout" cat-file -e "${NEREIDFORGE_VERIFIER_REF}^{commit}" || return 1
+  git -C "$checkout" checkout --detach "$NEREIDFORGE_VERIFIER_REF" || return 1
+  [[ "$(git -C "$checkout" rev-parse HEAD)" == "$NEREIDFORGE_VERIFIER_REF"* ]] || return 1
 }
 if [[ ! -d "$NF_VERIFIER_DIR/.git" ]]; then
   [[ ! -e "$NF_VERIFIER_DIR" ]] || {

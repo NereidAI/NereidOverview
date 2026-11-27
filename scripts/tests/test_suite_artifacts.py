@@ -129,6 +129,25 @@ helm() {{
         self.assertEqual(len(self.calls.read_text().splitlines()), 1)
         self.assertEqual(archive.read_text(), "corrupt")
 
+    def test_floating_bare_version_chart_freezes_just_like_an_immutable_one(self):
+        # NereidForge development charts keep the bare 0.0.0-dev identity; the
+        # lock and evidence machinery must accept that resolved version shape.
+        body = 'suite_pull_chart_frozen nereididentity 0.0.0-dev\n'
+        first = self.run_bash(body, version="0.0.0-dev")
+        archive = Path(first.stdout.strip())
+        self.assertEqual(archive.name, "nereididentity-0.0.0-dev.tgz")
+        lock = (self.locks / "chart-nereididentity-0.0.0-dev.lock").read_text()
+        self.assertIn("LOCKED_RESOLVED_VERSION=0.0.0-dev", lock)
+
+        # The second run reuses the frozen archive even if the registry side
+        # would now resolve a different generation.
+        second = self.run_bash(body, version="0.0.0-dev")
+        self.assertEqual(second.stdout.strip(), str(archive))
+        self.assertEqual(
+            self.calls.read_text().splitlines(),
+            ["nereididentity:0.0.0-dev:0.0.0-dev"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
