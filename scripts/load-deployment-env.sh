@@ -136,12 +136,17 @@ if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
 PY
 }
 
-# Chart version shapes. The development channel uses the floating 0.0.0-dev
-# selector, always resolved to an immutable 0.0.0-dev-<sha7> chart, while a
-# suite release selects a bare SemVer chart. Resolved versions are always
-# pinned, never the floating tag.
+# Chart version shapes. The development channel always selects the floating
+# 0.0.0-dev tag (or a legacy immutable 0.0.0-dev-<sha7> pin for reproduction).
+# NereidForge development charts keep the bare 0.0.0-dev identity inside
+# Chart.yaml and roll forward as one moving tag; the other products' dev
+# charts still retain an immutable 0.0.0-dev-<sha7> internal version. Both
+# resolved shapes stay supported so existing frozen archives and locks remain
+# valid. A suite release selects a bare SemVer chart. Regardless of the version
+# shape, every resolution is frozen by its retained OCI digest intent and lock,
+# so a moved floating tag can never change a prepared deployment root.
 _NEREID_DEV_CHART_SELECTOR_RE='^0\.0\.0-dev(-[0-9a-f]{7})?$'
-_NEREID_DEV_CHART_VERSION_RE='^0\.0\.0-dev-[0-9a-f]{7}$'
+_NEREID_DEV_CHART_VERSION_RE='^0\.0\.0-dev(-[0-9a-f]{7})?$'
 _NEREID_RELEASE_CHART_RE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'
 
 _nereid_is_supported_chart_selector() {
@@ -278,7 +283,7 @@ PY
         helm show chart "$archive" | tee "$DEPLOY_LOG_ROOT/$product/chart-metadata.txt" >&2
         resolved_version="$(helm show chart "$archive" | awk '/^version:/ {print $2; exit}' | tr -d '"')"
         _nereid_is_supported_resolved_chart_version "$resolved_version" || {
-            echo "Chart did not retain a supported immutable version: $product:$resolved_version" >&2
+            echo "Chart did not retain a supported development or release version: $product:$resolved_version" >&2
             return 1
         }
         [[ "$selector" == "0.0.0-dev" || "$resolved_version" == "$selector" ]] || {
@@ -286,12 +291,26 @@ PY
             return 1
         }
         final_archive="$DEPLOYMENT_ROOT/chart-archives/$product-$resolved_version.tgz"
-        [[ ! -e "$final_archive" && ! -L "$final_archive" ]] || {
-            echo "Refusing to replace an existing chart archive without valid completion evidence: $final_archive" >&2
-            return 1
-        }
-        mv "$archive" "$final_archive"
-        archive="$final_archive"
+        if [[ -e "$final_archive" || -L "$final_archive" ]]; then
+            if [[ -f "$final_archive" && ! -L "$final_archive" \
+                && "$(sha256sum "$final_archive" | awk '{print $1}')" == "${layer_digest#sha256:}" ]]; then
+                # Same verified bytes under a reused floating filename: adopt
+                # the existing archive instead of replacing operator state.
+                rm -f "$archive"
+                archive="$final_archive"
+            elif [[ "$resolved_version" == "0.0.0-dev" ]]; then
+                echo "Floating chart archive already holds a different generation: $final_archive" >&2
+                echo "Remove that archive together with its lock, digest intent, and completion files to roll 0.0.0-dev forward, then rerun." >&2
+                return 1
+            else
+                echo "Refusing to replace an existing chart archive without valid completion evidence: $final_archive" >&2
+                return 1
+            fi
+        fi
+        if [[ "$archive" != "$final_archive" ]]; then
+            mv "$archive" "$final_archive"
+            archive="$final_archive"
+        fi
     fi
 
     archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"

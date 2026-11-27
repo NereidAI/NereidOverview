@@ -121,12 +121,16 @@ Changing the inputs of a completed stage is rejected. Resume is not an upgrade,
 rotation, or adoption mechanism. Use a separate reviewed upgrade/recovery plan
 for those operations.
 
-### Verifier-only commit override
+### Verifier commit selection
 
-By default, `forge-acceptance` checks out the NF verifier at the same immutable
-commit as the frozen consolidated `nereidforge` chart. If a reviewed fix changes
-only the verifier, an operator can select that fix without republishing or
-changing the runtime artifacts:
+`forge-acceptance` always runs an exact-commit, verification-only checkout of
+NereidForge. With a legacy immutable chart (resolved `0.0.0-dev-<sha7>`) the
+frozen chart version names that commit directly. A floating `0.0.0-dev` chart
+intentionally carries no source identity, so for that chart shape
+`NF_VERIFIER_REF` is **required** and must be the reviewed, full 40-character
+NereidForge commit ID; the stage fails closed without it. The same variable also
+overrides the default commit of an immutable chart when a reviewed fix changes
+only the verifier, without republishing or changing the runtime artifacts:
 
 ```bash
 # Replace this example with the reviewed, full NF commit ID.
@@ -232,13 +236,18 @@ checkout with the same rule as the product repositories:
 first pull of each selector is still frozen by the per-product artifact lock
 and digest evidence, so a floating `0.0.0-dev` default cannot move under an
 already-prepared deployment root, and the stage fingerprints treat version
-changes as explicit configuration changes.
+changes as explicit configuration changes. The freeze holds for both internal
+chart versions the pull path accepts: legacy `0.0.0-dev-<sha7>` charts and the
+floating NereidForge charts whose own `version` is the bare `0.0.0-dev` tag.
 
 An explicit selector in `deployment.env` (for example
 `NEREIDLINK_VERSION=0.0.1`) overrides the matrix default for that product and
 remains the supported escape hatch for a reviewed exception. The chart pull
 path accepts both development selectors (`0.0.0-dev`, `0.0.0-dev-<sha7>`) and
-bare SemVer release selectors; anything else fails closed.
+bare SemVer release selectors; anything else fails closed. Rolling a floating
+NereidForge chart forward on purpose means removing that product's lock,
+digest intent, completion evidence, and bare-named archive before rerunning,
+so the next anonymous resolution freezes a new digest.
 
 ### Cutting a suite release
 
@@ -362,13 +371,14 @@ credential-bearing file listed in this section.
 
 The first anonymous chart/pre resolution atomically records its OCI digest
 intent before downloading bytes. Retrieval then uses that digest, verifies the
-chart blob or published archive checksum, and records the immutable version and
-local archive path under `quick-install/artifact-locks/`. An interrupted run
-recovers validated bytes or resumes retrieval by the retained digest without
-resolving the floating selector again. Resume reuses those verified bytes even
-if `0.0.0-dev` later moves. A missing, mismatched, or corrupt intent, archive,
-or completion record fails closed; it does not silently download a newer
-snapshot.
+chart blob or published archive checksum, and records the resolved internal
+version (a short-SHA version, or the bare `0.0.0-dev` version for a floating
+NereidForge chart) and local archive path under
+`quick-install/artifact-locks/`. An interrupted run recovers validated bytes or
+resumes retrieval by the retained digest without resolving the floating
+selector again. Resume reuses those verified bytes even if `0.0.0-dev` later
+moves. A missing, mismatched, or corrupt intent, archive, or completion record
+fails closed; it does not silently download a newer snapshot.
 
 Rerun behavior is not based solely on local markers:
 

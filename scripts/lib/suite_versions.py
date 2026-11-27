@@ -21,10 +21,12 @@ from typing import Any
 
 import yaml
 
-# Bare SemVer per treaty section 19.5, plus the rolling 0.0.0-dev channel and
-# its immutable 0.0.0-dev-<short-sha> form. The strict character class is the
-# primary guard against shell/selector injection; shlex.quote is defense in
-# depth for the emitted assignments.
+# Bare SemVer per treaty section 19.5, plus the rolling 0.0.0-dev channel.
+# The legacy 0.0.0-dev-<short-sha> selector remains accepted for reproducing
+# frozen snapshots even though NereidForge development charts now keep the
+# bare rolling identity. The strict character class is the primary guard
+# against shell/selector injection; shlex.quote is defense in depth for the
+# emitted assignments.
 SELECTOR_RE = re.compile(
     r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$"

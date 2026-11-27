@@ -1090,7 +1090,7 @@ install_forge() (
     version="$(suite_frozen_chart_version nereidforge "$NEREIDFORGE_VERSION")"
     for chart in nereidforge-ml-backend; do
         [[ "$(suite_frozen_chart_version "$chart" "$NEREIDFORGE_VERSION")" == "$version" ]] || {
-            echo "NF application charts resolved to different immutable versions" >&2
+            echo "NF application charts resolved to different versions" >&2
             exit 1
         }
     done
@@ -1132,15 +1132,29 @@ run_nf_verifier() {
     local version short_sha verifier_ref checkout_id verifier temporary
     version="$(suite_frozen_chart_version nereidforge "$NEREIDFORGE_VERSION")"
     short_sha="${version#0.0.0-dev-}"
-    [[ "$short_sha" =~ ^[0-9a-f]{7}$ ]] || {
-        echo "NF verifier requires an immutable development chart version" >&2
-        return 1
-    }
-    verifier_ref="$short_sha"
-    checkout_id="$version"
-    if [[ -n "${NF_VERIFIER_REF:-}" ]]; then
+    if [[ "$short_sha" =~ ^[0-9a-f]{7}$ ]]; then
+        # Legacy immutable development chart: its internal version names the
+        # exact source commit, which stays the default verifier checkout.
+        verifier_ref="$short_sha"
+        checkout_id="$version"
+    elif [[ "$version" == "0.0.0-dev" ]]; then
+        # A floating development chart intentionally carries no source commit.
+        # The reviewed verifier commit must therefore be named explicitly so
+        # acceptance still runs an exact, reproducible checkout.
+        [[ -n "${NF_VERIFIER_REF:-}" ]] || {
+            echo "Floating 0.0.0-dev chart carries no source commit;" >&2
+            echo "set NF_VERIFIER_REF to the reviewed full NereidForge commit ID" >&2
+            return 1
+        }
         verifier_ref="$NF_VERIFIER_REF"
         checkout_id="$version-verifier-$verifier_ref"
+    else
+        echo "NF verifier requires a supported development chart version: $version" >&2
+        return 1
+    fi
+    if [[ -n "${NF_VERIFIER_REF:-}" && "$verifier_ref" != "$NF_VERIFIER_REF" ]]; then
+        verifier_ref="$NF_VERIFIER_REF"
+        checkout_id="$version-verifier-$NF_VERIFIER_REF"
     fi
     verifier="$DEPLOYMENT_ROOT/verifiers/nereidforge-$checkout_id"
     install -d -m 700 "$DEPLOYMENT_ROOT/verifiers"

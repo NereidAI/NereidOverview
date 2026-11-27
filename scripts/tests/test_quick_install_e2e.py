@@ -860,6 +860,49 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertEqual(self.current_state(), "link=complete")
         self.assertEqual(self.count_calls(f"git\t-C\t{verifier}\tfetch\t"), 1)
 
+    def use_floating_chart(self):
+        state = self.read_cluster()
+        state["chart_version"] = "0.0.0-dev"
+        self.write_cluster(state)
+
+    def test_floating_chart_fails_closed_without_explicit_verifier_ref(self):
+        self.use_floating_chart()
+
+        result = self.run_installer(expected=1)
+
+        self.assertEqual(self.current_state(), "forge-acceptance=failed")
+        log = (
+            self.deployment / "deploy-logs" / "quick-install" / "forge-acceptance.log"
+        ).read_text()
+        self.assertIn("Floating 0.0.0-dev chart carries no source commit", log)
+        self.assertIn("NF_VERIFIER_REF", log)
+        self.assertEqual(self.count_calls("git\tclone\t"), 0)
+        self.assertEqual(self.count_calls("nf\t60_verify/nf-check"), 0)
+
+    def test_floating_chart_uses_the_explicit_verifier_ref_end_to_end(self):
+        self.use_floating_chart()
+        verifier_ref = "abcdef1" + "a" * 33
+        self.write_config(
+            NF_VERIFIER_REF=verifier_ref,
+            NF_LIVE_ACCEPTANCE_CONFIRMED="yes",
+        )
+
+        self.run_installer()
+
+        self.assertEqual(self.current_state(), "link=complete")
+        verifier = self.deployment / "verifiers" / (
+            f"nereidforge-0.0.0-dev-verifier-{verifier_ref}"
+        )
+        self.assertTrue((verifier / "scripts" / "60_verify" / "nf-check.sh").is_file())
+        self.assertEqual(self.count_calls("nf\t60_verify/nf-check"), 1)
+        self.assertTrue(any(
+            line.startswith("git\t-C\t")
+            and line.endswith(f"\tcheckout\t--detach\t{verifier_ref}")
+            for line in self.call_lines()
+        ))
+        # The runtime chart keeps the bare floating version.
+        self.assertEqual(self.read_cluster()["chart_version"], "0.0.0-dev")
+
     def test_link_migration_ignores_failed_old_revision(self):
         self.write_config(NF_LIVE_ACCEPTANCE_CONFIRMED="yes")
 

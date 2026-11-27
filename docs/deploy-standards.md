@@ -57,21 +57,35 @@ keep thin callers and use the same implementation for both channels.
 
 A push to the default branch first publishes every required product image. Each
 image's `0.0.0-dev-<short-sha>` and `0.0.0-dev` tags share one index digest.
-Only after all required images succeed does chart publication:
+Only after all required images succeed does chart publication. Two chart
+identity contracts coexist:
 
-1. package and verify one immutable `0.0.0-dev-<short-sha>` chart whose
-   `appVersion` selects the matching immutable images; then
-2. attach the floating `0.0.0-dev` OCI tag to that exact chart manifest.
+1. **Immutable chart plus floating alias (org default).** The product
+   repositories package and verify one immutable `0.0.0-dev-<short-sha>` chart
+   whose `appVersion` selects the matching immutable images, then attach the
+   floating `0.0.0-dev` OCI tag to that exact chart manifest. The floating tag
+   must never identify a separately packaged archive; its OCI digest and pulled
+   `.tgz` bytes must equal the immutable snapshot's. The pre-NereidForge
+   installer and the non-Forge product charts follow this contract.
+2. **Floating-only NereidForge charts (documented exception).** The three NF
+   development charts keep the rolling `0.0.0-dev` identity inside
+   `Chart.yaml`; their image references stay on the floating `0.0.0-dev` image
+   tags, so no development chart is ever bound to a short-sha identity. The
+   single moving OCI tag is replaced through a force push with explicit Helm
+   media types, bounded digest read-back, and automatic rollback to the
+   previously recorded digest. A same-commit rerun is a byte-verified no-op.
 
-The floating chart tag must never identify a separately packaged `0.0.0-dev`
-archive. Its OCI digest and pulled `.tgz` bytes must equal the immutable
-snapshot's. A failed image or chart publication leaves the previous floating
-chart snapshot in place.
+Under both contracts a failed image or chart publication leaves the previous
+floating chart snapshot in place, and immutable image tags are never
+overwritten.
 
 Normal development installations use `0.0.0-dev`; no per-commit edit is needed.
-Record the resolved chart OCI digest, its internal short-SHA version, and the
-running image digests. Select `0.0.0-dev-<short-sha>` directly only for a
-deliberate reproducible snapshot.
+The installer accepts both internal chart versions — bare `0.0.0-dev` and
+legacy `0.0.0-dev-<short-sha>` — and freezes either one through its retained
+OCI digest intent and artifact lock, so a moved floating tag can never change
+a prepared deployment root. Record the resolved chart OCI digest, its internal
+version, and the running image digests. Select `0.0.0-dev-<short-sha>` directly
+only for a deliberate reproducible snapshot of an immutable-contract product.
 
 ### Formal-release channel
 
@@ -90,9 +104,12 @@ Every OCI push uses Helm registry authentication, is pulled back
 authenticated, and is compared byte-for-byte with the pushed archive. New GHCR
 packages must be publicly visible before the release is accepted. Every selector
 referenced by the installation guide then passes a separate anonymous chart
-pull/render and anonymous image-manifest check. For the development channel,
-verification also proves that floating and immutable chart tags resolve to the
-same OCI digest and byte-identical archive.
+pull/render and anonymous image-manifest check. For immutable-contract products,
+development verification also proves that floating and immutable chart tags
+resolve to the same OCI digest and byte-identical archive. For the
+floating-only NereidForge charts, verification instead proves that the
+anonymously pulled `0.0.0-dev` archive is byte-identical to the packaged one,
+carries `0.0.0-dev` metadata, and renders no short-sha image reference.
 
 ## 15.4 Forge development boundary
 
@@ -111,7 +128,8 @@ installation channel. The gates are independently enforceable: the anonymously
 verified pre installer and five supporting charts permit pre-only §7.2, while
 every image in the selected `full` or `cpu-xpu` profile and all three NF charts
 must pass their separate anonymous gate before NF §§7.3–7.5. Record the image
-profile, each resolved immutable version, OCI digest, and source commit. Missing
+profile, each resolved chart version (bare `0.0.0-dev` for the floating NF
+charts), OCI digest, and source commit where one exists. Missing
 NF evidence stops the operator after pre acceptance; it
 does not block or invalidate a pre-only installation. Do not claim a complete
 public Forge snapshot until both gates pass. Artifact availability does not
