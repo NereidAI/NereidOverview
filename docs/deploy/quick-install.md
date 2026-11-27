@@ -8,8 +8,9 @@ available and defines the same ordering, security, and acceptance contracts.
 
 The quick installer automates the **central suite** from one non-secret
 `deployment.env`. It does not automate cluster creation, DNS/NFS provisioning,
-Open Horizon edge onboarding, or ESS model delivery. It currently accepts only
-the reviewed `0.0.0-dev` and immutable `0.0.0-dev-<short-sha>` selectors.
+Open Horizon edge onboarding, or ESS model delivery. It uses the rolling
+`0.0.0-dev` selectors and still accepts retained legacy
+`0.0.0-dev-<short-sha>` selectors for reproducing historical snapshots.
 
 ## 1. Prepare the cluster and one configuration file
 
