@@ -33,9 +33,11 @@ artifact gate passes and never asserts that the artifact is already available.
 - Tracked first-party product charts use `version: 0.0.0-dev` and
   `appVersion: "0.0.0-dev"`. Packaging injects the selected version; a release
   version is not committed back into `Chart.yaml`.
-- First-party image tags default to `.Chart.AppVersion`. A chart resolved
-  through the floating development selector retains its immutable `appVersion`
-  and therefore selects the matching immutable images.
+- First-party image tags default to `.Chart.AppVersion`. A development chart
+  keeps the floating `0.0.0-dev` `appVersion` and therefore selects the
+  floating `0.0.0-dev` image tags; per-commit image tags remain in the image
+  registry as traceability artifacts but are never selected by a development
+  chart.
 - Upstream wrapper charts retain their own `version` and `appVersion`. A suite
   release must not overwrite independent upstream metadata.
 - Dependencies are locked. Publication registers declared public HTTPS
@@ -56,36 +58,32 @@ keep thin callers and use the same implementation for both channels.
 ### Development channel
 
 A push to the default branch first publishes every required product image. Each
-image's `0.0.0-dev-<short-sha>` and `0.0.0-dev` tags share one index digest.
-Only after all required images succeed does chart publication. Two chart
-identity contracts coexist:
+image keeps two tags on one index digest: the floating `0.0.0-dev` tag and a
+per-commit `0.0.0-dev-<short-sha>` traceability tag. Only after all required
+images succeed does chart publication.
 
-1. **Immutable chart plus floating alias (org default).** The product
-   repositories package and verify one immutable `0.0.0-dev-<short-sha>` chart
-   whose `appVersion` selects the matching immutable images, then attach the
-   floating `0.0.0-dev` OCI tag to that exact chart manifest. The floating tag
-   must never identify a separately packaged archive; its OCI digest and pulled
-   `.tgz` bytes must equal the immutable snapshot's. The pre-NereidForge
-   installer and the non-Forge product charts follow this contract.
-2. **Floating-only NereidForge charts (documented exception).** The three NF
-   development charts keep the rolling `0.0.0-dev` identity inside
-   `Chart.yaml`; their image references stay on the floating `0.0.0-dev` image
-   tags, so no development chart is ever bound to a short-sha identity. The
-   single moving OCI tag is replaced through a force push with explicit Helm
-   media types, bounded digest read-back, and automatic rollback to the
-   previously recorded digest. A same-commit rerun is a byte-verified no-op.
+**Floating-only development charts are the suite-wide contract.** Every
+product development chart keeps the rolling `0.0.0-dev` identity inside
+`Chart.yaml` (both `version` and `appVersion`), and its image references stay
+on the floating `0.0.0-dev` image tags, so no development chart is ever bound
+to a short-sha identity. The single moving OCI tag is published with `helm
+push` on first use; a same-commit rerun is a byte-verified no-op, and changed
+content replaces the tag through a force push with explicit Helm media types,
+bounded digest read-back, and automatic rollback to the previously recorded
+digest. Packages are normalized (fixed tar order, mtime, owner) so identical
+chart content is byte-identical across checkouts and runs. A failed image or
+chart publication leaves the previous floating chart snapshot in place, and
+the per-commit image tags are never overwritten.
 
-Under both contracts a failed image or chart publication leaves the previous
-floating chart snapshot in place, and immutable image tags are never
-overwritten.
-
-Normal development installations use `0.0.0-dev`; no per-commit edit is needed.
+Earlier `0.0.0-dev-<short-sha>` chart tags published under the previous model
+remain in the registries as historical snapshots but are no longer produced.
 The installer accepts both internal chart versions — bare `0.0.0-dev` and
 legacy `0.0.0-dev-<short-sha>` — and freezes either one through its retained
 OCI digest intent and artifact lock, so a moved floating tag can never change
 a prepared deployment root. Record the resolved chart OCI digest, its internal
-version, and the running image digests. Select `0.0.0-dev-<short-sha>` directly
-only for a deliberate reproducible snapshot of an immutable-contract product.
+version, and the running image digests. Normal development installations use
+`0.0.0-dev` with no per-commit edit; select a retained
+`0.0.0-dev-<short-sha>` chart only to reproduce a specific historical snapshot.
 
 ### Formal-release channel
 
@@ -104,12 +102,11 @@ Every OCI push uses Helm registry authentication, is pulled back
 authenticated, and is compared byte-for-byte with the pushed archive. New GHCR
 packages must be publicly visible before the release is accepted. Every selector
 referenced by the installation guide then passes a separate anonymous chart
-pull/render and anonymous image-manifest check. For immutable-contract products,
-development verification also proves that floating and immutable chart tags
-resolve to the same OCI digest and byte-identical archive. For the
-floating-only NereidForge charts, verification instead proves that the
-anonymously pulled `0.0.0-dev` archive is byte-identical to the packaged one,
-carries `0.0.0-dev` metadata, and renders no short-sha image reference.
+pull/render and anonymous image-manifest check. Development verification
+proves that the anonymously pulled `0.0.0-dev` archive is byte-identical to the
+packaged one, carries `0.0.0-dev` metadata, and renders no short-sha image
+reference. A retained legacy `0.0.0-dev-<short-sha>` chart selected for
+historical reproduction is verified against its own frozen OCI digest.
 
 ## 15.4 Forge development boundary
 

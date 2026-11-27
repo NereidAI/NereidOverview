@@ -37,17 +37,18 @@ The [dated evidence snapshot](reference/development-artifacts-2026-11-22.md)
 binds that verification to the exact resolved chart versions/digests and image
 index digests. It is historical evidence, not a per-commit installation pin.
 
-Two development chart identity contracts coexist behind the same `0.0.0-dev`
-selector. The non-Forge products and the pre-NereidForge installer publish an
-immutable `0.0.0-dev-<short-sha>` chart whose floating tag aliases that exact
-manifest; the downloaded archive retains the short-SHA `version` and
-`appVersion`. The three NereidForge charts instead keep the bare rolling
-`0.0.0-dev` identity inside `Chart.yaml` and reference only floating
-`0.0.0-dev` images: the single moving OCI tag rolls forward per publication,
-with a digest read-back and rollback on the publisher side. No development
-chart is ever bound to a short-sha identity; only a formal `v<SemVer>` tag
-pins a chart once. Third-party images retain their public upstream coordinates
-and pinned versions.
+One development chart identity contract now applies suite-wide behind the
+`0.0.0-dev` selector. Every product chart keeps the bare rolling `0.0.0-dev`
+identity inside `Chart.yaml` (both `version` and `appVersion`) and references
+only floating `0.0.0-dev` images: the single moving OCI tag rolls forward per
+publication, with normalized packaging, a byte-verified no-op on rerun, digest
+read-back, and rollback on the publisher side. No development chart is bound
+to a short-sha identity; only a formal `v<SemVer>` tag pins a chart once.
+Images still carry per-commit `0.0.0-dev-<short-sha>` traceability tags, but
+development charts never select them. Earlier short-sha chart tags published
+under the previous model remain in the registries as historical snapshots.
+Third-party images retain their public upstream coordinates and pinned
+versions.
 
 The pre-NereidForge installer and NereidForge charts also use `0.0.0-dev`.
 Section 2 writes every selector to one persistent `deployment.env`; no per-shell
@@ -59,14 +60,15 @@ root. Pre and NF resolve their floating selectors independently.
 
 Record each resolved chart OCI digest and internal version, the running image
 IDs/digests, selected kubecontext, and installation date in the deployment
-hand-off. For deliberate reproduction of an immutable-contract product,
-replace a floating selector in `deployment.env` with its resolved
-`0.0.0-dev-<short-sha>` version only after anonymously verifying that
-snapshot. To deliberately roll a floating NereidForge chart forward, remove
-that product's artifact lock together with its digest intent, completion
-evidence, and the bare-named `chart-archives/<product>-0.0.0-dev.tgz`
-archive, then rerun the pull block; the next anonymous resolution freezes the
-new digest. Do not infer or invent release versions.
+hand-off. The recorded digest already reproduces any floating-tag snapshot.
+For a historical build, replace a floating selector in `deployment.env` with
+a retained `0.0.0-dev-<short-sha>` chart version only after anonymously
+verifying that snapshot. To deliberately roll a floating chart forward,
+remove that product's artifact lock together with its digest intent,
+completion evidence, and the bare-named
+`chart-archives/<product>-0.0.0-dev.tgz` archive, then rerun the pull block;
+the next anonymous resolution freezes the new digest. Do not infer or invent
+release versions.
 
 ## 2. Operator environment
 
@@ -610,14 +612,15 @@ source-tree installation.
 
 Use the `PRE_VERSION=0.0.0-dev` and `NEREIDFORGE_VERSION=0.0.0-dev` selections
 already loaded from `deployment.env`. The two resolved versions are independent
-and need not match. Record each resolved internal version (a short-SHA
-`0.0.0-dev-<sha7>` identity, or the bare `0.0.0-dev` version of a floating
-NereidForge chart), OCI digest, and source commit where one exists.
+and need not match. Record each resolved internal version (the bare
+`0.0.0-dev` version of a floating chart, or a retained legacy short-SHA
+`0.0.0-dev-<sha7>` identity selected for historical reproduction), OCI digest,
+and source commit where one exists.
 
 **Section 7.2 requires only the pre publication gate**:
 `pre-nereidforge-publish-dev` must have anonymously verified the ORAS pre
-installer and all five supporting charts, each with matching floating and
-immutable identities. A missing or partial NF image publication does not block
+installer and all five supporting charts on their floating `0.0.0-dev`
+identities. A missing or partial NF image publication does not block
 a pre-only installation.
 
 **Sections 7.3–7.5 additionally require the complete selected-profile NF gate**.

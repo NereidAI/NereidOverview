@@ -50,13 +50,15 @@ publication runs:
 | NereidHorizon | `oci://ghcr.io/nereidai/charts/nereidhorizon` | `0.0.0-dev` |
 | NereidLink | `oci://ghcr.io/nereidai/charts/nereidlink` | `0.0.0-dev` |
 
-The floating chart tag aliases the latest successfully published immutable
-`0.0.0-dev-<short-sha>` OCI manifest; it is not a separate chart package. The
-archive retains that immutable chart version and `appVersion`, selecting
-matching immutable product images. Normal development installations therefore
-need only `0.0.0-dev`. Record the resolved chart digest/version and running
-image digests as deployment evidence. Use the resolved short-SHA snapshot only
-for deliberate reproduction. Formal deployments must select a published,
+The development chart is the single floating `0.0.0-dev` OCI manifest: each
+main-branch publication moves that tag to a new verified package, and the
+archive keeps `0.0.0-dev` metadata and selects the floating `0.0.0-dev`
+product images. Per-commit image tags remain in the image registries as
+traceability artifacts but are not selected by development charts. Earlier
+`0.0.0-dev-<short-sha>` chart tags remain available only for reproducing
+historical snapshots. Normal development installations therefore need only
+`0.0.0-dev`; record the resolved chart digest/version and running image
+digests as deployment evidence. Formal deployments must select a published,
 anonymously verified bare-SemVer version instead.
 
 The quick installer's per-channel defaults live in the single version matrix
