@@ -120,6 +120,31 @@ class QuickInstallContractTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(path, self.guide)
 
+    def test_ingress_gates_retry_transient_gateway_errors_without_masking_faults(self):
+        self.assertIn("wait_for_ingress_url()", self.script)
+        for url in (
+            "https://sso.$BASE_DOMAIN/auth/realms/nereidai/.well-known/openid-configuration",
+            "https://nereidsphere.$BASE_DOMAIN/readyz",
+            "https://nereidhorizon.$BASE_DOMAIN/api/health",
+            "https://nereidhorizon.$BASE_DOMAIN/api/setup-status",
+            "https://nereidlink.$BASE_DOMAIN/healthz",
+        ):
+            with self.subTest(url=url):
+                self.assertIn(url, self.script)
+        # No single-shot --fail curl may remain against a product Ingress.
+        bare_ingress_curl = [
+            line
+            for line in self.script.splitlines()
+            if "curl --fail" in line and "$BASE_DOMAIN" in line
+        ]
+        self.assertEqual(bare_ingress_curl, [])
+        # The bounded window is tunable and documented like the other gates.
+        for name in ("INGRESS_VERIFY_ATTEMPTS", "INGRESS_VERIFY_RETRY_DELAY"):
+            self.assertIn(name, self.script)
+            self.assertIn(name, self.guide)
+        # Deterministic 3xx/4xx answers must fail immediately, only 5xx retries.
+        self.assertIn("^(3|4)[0-9][0-9]$", self.script)
+
 
 class QuickInstallStatusTest(unittest.TestCase):
     def make_config(self, root, extra=""):

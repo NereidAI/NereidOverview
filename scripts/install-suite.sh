@@ -136,6 +136,14 @@ LINK_ADMIN_CREDENTIALS_FILE="$DEPLOY_VALUES_ROOT/nereidlink/admin-credentials.en
 LINK_LOCAL_HTTP_PORT="${LINK_LOCAL_HTTP_PORT:-0}"
 LINK_API_READY_ATTEMPTS="${LINK_API_READY_ATTEMPTS:-20}"
 LINK_API_RETRY_DELAY="${LINK_API_RETRY_DELAY:-2}"
+# Ingress readiness lags Deployment availability: EndpointSlice publication,
+# the Traefik backend reload and, on a first install, cert-manager issuance of
+# the TLS Secret all settle asynchronously. Product verification gates retry
+# transient gateway/transport answers inside this bounded window instead of
+# aborting on a single 503; 3xx/4xx answers and an exhausted budget still fail
+# the stage closed.
+INGRESS_VERIFY_ATTEMPTS="${INGRESS_VERIFY_ATTEMPTS:-30}"
+INGRESS_VERIFY_RETRY_DELAY="${INGRESS_VERIFY_RETRY_DELAY:-5}"
 
 export DEPLOYMENT_ROOT DEPLOY_VALUES_ROOT DEPLOY_LOG_ROOT DEPLOYMENT_ENV_FILE
 export KUBECONTEXT BASE_DOMAIN NFS_SERVER NFS_EXPORT LINK_MQTTS_HOST
@@ -601,6 +609,56 @@ verify_prerequisites() (
     verify_hardware
 )
 
+# Poll a product URL through the cluster Ingress until it answers with a 2xx
+# status. `kubectl rollout status` only waits for the Pod's own readiness gate;
+# the EndpointSlice, the Traefik backend and, on a first install, the
+# cert-manager TLS Secret propagate afterwards, during which Traefik returns
+# 502/503/504 or refuses the connection even though the Pod is already Ready.
+# Only those transient gateway/transport failures are retried: a 3xx/4xx
+# answer or an exhausted attempt budget fails the stage, so real routing or
+# authentication faults are never masked. The response body is emitted on
+# stdout for the caller to redirect, exactly like a direct curl invocation.
+# Usage: wait_for_ingress_url "<label>" [curl flags...] "<url>" > file
+wait_for_ingress_url() {
+    local label="$1"; shift
+    local attempt status curl_rc body err
+    body="$(mktemp)"
+    err="$(mktemp)"
+    trap 'rm -f "$body" "$err"' RETURN
+    for ((attempt = 1; attempt <= INGRESS_VERIFY_ATTEMPTS; attempt++)); do
+        curl_rc=0
+        if ! status=$(curl --silent --show-error \
+                --max-time "$NEREID_CURL_TIMEOUT" \
+                -o "$body" -w '%{http_code}' "$@" 2>"$err"); then
+            curl_rc=$?
+            status=""
+        fi
+        if [[ "$curl_rc" -eq 0 && "$status" =~ ^2[0-9][0-9]$ ]]; then
+            cat "$body"
+            rm -f "$body" "$err"
+            return 0
+        fi
+        if [[ "$curl_rc" -eq 0 && "$status" =~ ^(3|4)[0-9][0-9]$ ]]; then
+            echo "[ERROR] $label answered HTTP $status; failing without retry" >&2
+            cat "$err" >&2 || true
+            rm -f "$body" "$err"
+            return 1
+        fi
+        if (( attempt < INGRESS_VERIFY_ATTEMPTS )); then
+            echo "[INFO] $label not reachable through the Ingress yet" \
+                "(attempt $attempt/$INGRESS_VERIFY_ATTEMPTS," \
+                "http=${status:-none}, curl=$curl_rc); retrying in" \
+                "${INGRESS_VERIFY_RETRY_DELAY}s" >&2
+            sleep "$INGRESS_VERIFY_RETRY_DELAY"
+        fi
+    done
+    echo "[ERROR] $label did not become reachable through the Ingress within" \
+        "$INGRESS_VERIFY_ATTEMPTS attempts" >&2
+    cat "$err" >&2 || true
+    rm -f "$body" "$err"
+    return 1
+}
+
 install_identity() (
     set -euo pipefail
     local chart
@@ -616,7 +674,7 @@ verify_identity() (
     kubectl -n nereididentity wait --for=condition=Ready \
         clusters.postgresql.cnpg.io/keycloak-db --timeout="$NEREID_VERIFY_TIMEOUT"
     kubectl -n nereididentity rollout status statefulset/nereididentity-keycloak --timeout="$NEREID_VERIFY_TIMEOUT"
-    curl --fail --silent --show-error --max-time "$NEREID_CURL_TIMEOUT" \
+    wait_for_ingress_url "NereidIdentity OIDC discovery" \
         --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
         "https://sso.$BASE_DOMAIN/auth/realms/nereidai/.well-known/openid-configuration" \
         > "$DEPLOY_LOG_ROOT/nereididentity/openid-configuration.json"
@@ -636,7 +694,7 @@ install_sphere() (
 verify_sphere() (
     set -euo pipefail
     kubectl -n nereidsphere rollout status deploy/nereidsphere --timeout="$NEREID_VERIFY_TIMEOUT"
-    curl --fail --silent --show-error --max-time "$NEREID_CURL_TIMEOUT" \
+    wait_for_ingress_url "NereidSphere readiness" \
         --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
         "https://nereidsphere.$BASE_DOMAIN/readyz" >/dev/null
     record_nereid_images nereidsphere
@@ -666,10 +724,10 @@ verify_horizon() (
     set -euo pipefail
     kubectl -n nereidhorizon rollout status deploy/nereidhorizon-backend --timeout="$NEREID_VERIFY_TIMEOUT"
     kubectl -n nereidhorizon rollout status deploy/nereidhorizon-frontend --timeout="$NEREID_VERIFY_TIMEOUT"
-    curl --fail --silent --show-error --max-time "$NEREID_CURL_TIMEOUT" \
+    wait_for_ingress_url "NereidHorizon backend health" \
         --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
         "https://nereidhorizon.$BASE_DOMAIN/api/health" >/dev/null
-    curl --fail --silent --show-error --max-time "$NEREID_CURL_TIMEOUT" \
+    wait_for_ingress_url "NereidHorizon setup status" \
         --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
         "https://nereidhorizon.$BASE_DOMAIN/api/setup-status" \
         > "$DEPLOY_LOG_ROOT/nereidhorizon/setup-status.json"
@@ -1602,7 +1660,7 @@ verify_link() (
     kubectl -n nereidlink rollout status deploy/nereidlink --timeout="$NEREID_VERIFY_TIMEOUT"
     kubectl -n nereidlink rollout status deploy/nereidlink-frontend --timeout="$NEREID_VERIFY_TIMEOUT"
     kubectl -n nereidlink get svc nereidlink-mqtt >/dev/null
-    curl --fail --silent --show-error --max-time "$NEREID_CURL_TIMEOUT" \
+    wait_for_ingress_url "NereidLink readiness" \
         --cacert "$DEPLOYMENT_ROOT/nereid-internal-ca.crt" \
         "https://nereidlink.$BASE_DOMAIN/healthz" >/dev/null
     verify_link_bootstrap
