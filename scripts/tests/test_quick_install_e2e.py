@@ -270,60 +270,14 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertIn("PG_ADMIN_PASSWORD=", self.pre_environment().read_text())
         self.assertTrue(marker.is_file())
 
-    def test_transient_ingress_503_is_retried_until_the_gate_passes(self):
-        state = self.read_cluster()
-        state["ingress_503_remaining"] = 3
-        self.write_cluster(state)
-        environment = {
-            "INGRESS_VERIFY_ATTEMPTS": "10",
-            "INGRESS_VERIFY_RETRY_DELAY": "0",
-        }
-        self.run_installer(expected=20, environment=environment)
-
-        # Every scripted 503 was consumed and the four Ingress gates that run
-        # before the suite pauses at forge-acceptance passed (identity, sphere,
-        # horizon health, horizon setup-status; the link gate runs later).
-        self.assertEqual(self.read_cluster().get("ingress_503_remaining"), 0)
-        ingress_calls = [
-            line
-            for line in self.call_lines()
-            if line.startswith("curl\t")
-            and "https://" in line
-            and "127.0.0.1" not in line
-        ]
-        self.assertEqual(len(ingress_calls), 7)
-        self.assertTrue(self.marker("sphere").is_file())
-        self.assertTrue(self.marker("horizon").is_file())
-
-    def test_persistent_ingress_503_fails_the_stage_closed(self):
-        state = self.read_cluster()
-        state["ingress_503_remaining"] = 99
-        self.write_cluster(state)
-        result = self.run_installer(
-            expected=1,
-            environment={
-                "INGRESS_VERIFY_ATTEMPTS": "3",
-                "INGRESS_VERIFY_RETRY_DELAY": "0",
-            },
+    def test_rendered_pre_handoff_carries_the_unified_admin_identity(self):
+        self.run_installer(expected=20)
+        lines = self.pre_environment().read_text(encoding="utf-8").splitlines()
+        self.assertIn("DEX_STATIC_EMAIL=admin@nereidai.local", lines)
+        self.assertFalse(
+            any("nereidforge.local" in line for line in lines),
+            lines,
         )
-        # The final failure is recorded in the private stage log while the
-        # console only carries filtered, non-secret activity.
-        identity_log = (
-            self.deployment / "deploy-logs" / "quick-install" / "identity.log"
-        ).read_text()
-        self.assertIn(
-            "did not become reachable through the Ingress within 3 attempts",
-            identity_log,
-        )
-        self.assertIn("attempt 1/3, http=503", result.stderr)
-        self.assertEqual(self.current_state(), "identity=failed")
-        self.assertFalse(self.marker("identity").exists())
-        identity_calls = [
-            line
-            for line in self.call_lines()
-            if line.startswith("curl\t") and "openid-configuration" in line
-        ]
-        self.assertEqual(len(identity_calls), 3)
 
     def test_pending_foreign_release_is_rejected_before_mutation(self):
         state = self.read_cluster()

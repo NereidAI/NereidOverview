@@ -196,6 +196,12 @@ def pre_kubeflow():
     return r"""#!/usr/bin/env bash
 set -euo pipefail
 source "$PRE_ROOT/scripts/lib/config.sh"
+# Mirror the real pre installer's fail-closed identity guard so the suite
+# cannot render a stale admin identity that the vendored manifests reject.
+if [[ "$DEX_STATIC_EMAIL" != "admin@nereidai.local" ]]; then
+    echo '[ERR] DEX_STATIC_EMAIL must remain admin@nereidai.local because the vendored Dex, Profile, and RBAC manifests use that identity' >&2
+    exit 1
+fi
 printf 'pre\t30_install-kubeflow\n' >> "$FAKE_SUITE_CALLS"
 if [[ "${FAKE_FAIL_PRE_KUBEFLOW:-no}" == yes ]]; then
     echo 'simulated Kubeflow apply failure' >&2

@@ -764,7 +764,7 @@ managed = {
     "STORAGE_CLASS": os.environ["PRE_NONSECRET_STORAGE_CLASS"],
     "POD_CIDR": os.environ["PRE_NONSECRET_POD_CIDR"],
     "SERVICE_CIDR": os.environ["PRE_NONSECRET_SERVICE_CIDR"],
-    "DEX_STATIC_EMAIL": "admin@nereidforge.local",
+    "DEX_STATIC_EMAIL": "admin@nereidai.local",
     "FRONTEND_HOST": os.environ["PRE_NONSECRET_FRONTEND_HOST"],
     "SSO_MODE": "ns",
     "SSO_NS_BASE_URL": os.environ["PRE_NONSECRET_SSO_NS_BASE_URL"],
@@ -886,7 +886,7 @@ validate_pre_inputs() {
         printf 'Missing required pre input: %s\n' "${missing[@]}" >&2
         return 1
     }
-    [[ "$DEX_STATIC_EMAIL" == admin@nereidforge.local && "$SSO_MODE" == ns ]] || return 1
+    [[ "$DEX_STATIC_EMAIL" == admin@nereidai.local && "$SSO_MODE" == ns ]] || return 1
     kubectl get storageclass "$STORAGE_CLASS" >/dev/null
 
     local secret_password secret_username access_key secret_key
