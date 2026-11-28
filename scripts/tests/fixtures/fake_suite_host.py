@@ -757,6 +757,7 @@ def run_kubectl(raw_args):
 def run_curl(args):
     url = next((arg for arg in args if arg.startswith(("http://", "https://"))), "")
     output = option(args, "-o") or option(args, "--output")
+    write_out = option(args, "-w") or option(args, "--write-out")
     if "127.0.0.1" in url:
         if os.environ.get("FAKE_LINK_API_UNREACHABLE") == "yes":
             print("simulated local API connection refusal", file=sys.stderr)
@@ -791,9 +792,24 @@ def run_curl(args):
             return 2
     else:
         body = "{}"
+    status = 200
+    if write_out and "127.0.0.1" not in url:
+        # Emulate the Ingress verification gate's bounded retry window:
+        # a scripted number of gateway 503 answers precede readiness.
+        state = load_state()
+        remaining = state.get("ingress_503_remaining", 0)
+        if remaining > 0:
+            state["ingress_503_remaining"] = remaining - 1
+            save_state(state)
+            status = 503
+            body = "{}"
     if output:
         Path(output).write_text(body + "\n", encoding="utf-8")
-    else:
+    if write_out:
+        # curl -w prints the write-out token (here the HTTP status) on stdout;
+        # the body stays in the -o file, mirroring the real helper contract.
+        print(str(status))
+    elif not output:
         print(body)
     return 0
 

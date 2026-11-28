@@ -182,11 +182,37 @@ KUBEFLOW_APPLY_ATTEMPTS=40 KUBEFLOW_APPLY_RETRY_DELAY=15 \
 scripts/install-suite.sh --config "$DEPLOYMENT_ROOT/deployment.env"
 ```
 
-These settings change only the apply wait window. They do not modify the
+These settings change only the apply wait window. They do not change the
 selected immutable artifact, suppress permanent errors, or bypass
 `pre-verify`. If the attempt budget is exhausted, the stage still fails closed;
 diagnose the cause and resume rather than deleting state or editing the
 extracted pre installer.
+
+### Ingress verification retry window
+
+A product stage is marked complete only after its public Ingress URL answers
+with a `2xx` status. `kubectl rollout status` cannot see the Ingress path:
+EndpointSlice publication, the Traefik backend reload and, on a first install,
+cert-manager issuance of the TLS Secret all settle asynchronously, so Traefik
+may answer `502`/`503`/`504` or refuse the connection for a few seconds even
+though the Pod already passes its own readiness probe. Each verification gate
+therefore retries only transient gateway and transport failures inside a
+bounded window controlled by two optional, non-secret environment variables:
+
+| Variable | Value and behavior |
+|---|---|
+| `INGRESS_VERIFY_ATTEMPTS` | A positive integer setting the maximum verification attempts per Ingress URL (default 30). |
+| `INGRESS_VERIFY_RETRY_DELAY` | A non-negative integer setting the delay between attempts in seconds (default 5). |
+
+A `3xx`/`4xx` answer is treated as a deterministic routing or authentication
+fault and fails the stage immediately; an exhausted attempt budget also fails
+closed. The window covers at most about two and a half minutes by default. To
+widen it for a slow environment, add both values to `deployment.env`:
+
+```bash
+export INGRESS_VERIFY_ATTEMPTS="60"
+export INGRESS_VERIFY_RETRY_DELAY="5"
+```
 
 ### External actions and independent Forge gates
 
