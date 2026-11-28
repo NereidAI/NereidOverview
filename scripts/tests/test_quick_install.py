@@ -83,6 +83,17 @@ class QuickInstallContractTest(unittest.TestCase):
         self.assertIn("their own procedures or automation", readme)
         self.assertRegex(self.guide, r"without\s+following this guide")
 
+    def test_pre_inputs_render_and_validate_the_unified_admin_identity(self):
+        # The pre-NereidForge installer fail-closed-guards this exact identity;
+        # the orchestrator must render and validate the same string or its
+        # generated site.env is rejected at the pre-kubeflow stage.
+        self.assertIn('"DEX_STATIC_EMAIL": "admin@nereidai.local"', self.script)
+        self.assertIn(
+            '[[ "$DEX_STATIC_EMAIL" == admin@nereidai.local && "$SSO_MODE" == ns ]]',
+            self.script,
+        )
+        self.assertNotIn("nereidforge.local", self.script)
+
     def test_kubeflow_retry_controls_and_credential_file_inventory_are_documented(self):
         for name in ("KUBEFLOW_APPLY_ATTEMPTS", "KUBEFLOW_APPLY_RETRY_DELAY"):
             self.assertIn(name, self.guide)

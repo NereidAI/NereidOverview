@@ -658,13 +658,13 @@ BASE_DOMAIN=example.org
 STORAGE_CLASS=nfs-csi
 POD_CIDR=10.42.0.0/16
 SERVICE_CIDR=10.43.0.0/16
-DEX_STATIC_EMAIL=admin@nereidforge.local
+DEX_STATIC_EMAIL=admin@nereidai.local
 FRONTEND_HOST=nereidforge.example.org
 SSO_MODE=ns
 SSO_NS_BASE_URL=https://nereidsphere.example.org
 ```
 
-The current pre installer uses `admin@nereidforge.local` in its Dex config,
+The current pre installer uses `admin@nereidai.local` in its Dex config,
 Kubeflow Profile, and RBAC. Do not substitute an email based on `BASE_DOMAIN`
 unless the installer first makes that identity configurable everywhere.
 
@@ -911,7 +911,7 @@ one:
     printf 'Missing required pre input: %s\n' "${missing[@]}" >&2
     exit 1
   fi
-  test "$DEX_STATIC_EMAIL" = admin@nereidforge.local
+  test "$DEX_STATIC_EMAIL" = admin@nereidai.local
   test "$SSO_MODE" = ns
   kubectl get storageclass "$STORAGE_CLASS" >/dev/null
 
