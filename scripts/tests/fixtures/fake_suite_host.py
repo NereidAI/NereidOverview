@@ -109,14 +109,30 @@ def output_format(args):
     return value.removeprefix("jsonpath=")
 
 
+# Mirrors the publish-chart engine's source-revision stamp. Override the value
+# with FAKE_CHART_SOURCE_REVISION, or set FAKE_OMIT_CHART_REVISION=yes to build
+# a floating chart that deliberately lacks the annotation.
+FAKE_CHART_REVISION = "0123456789abcdef0123456789abcdef01234567"
+
+
 def write_chart(product, version, destination):
     destination.mkdir(parents=True, exist_ok=True)
     archive = destination / f"{product}-{version}.tgz"
+    annotations = ""
+    if (
+        version == "0.0.0-dev"
+        and os.environ.get("FAKE_OMIT_CHART_REVISION") != "yes"
+    ):
+        revision = os.environ.get("FAKE_CHART_SOURCE_REVISION", FAKE_CHART_REVISION)
+        annotations = (
+            "\nannotations:\n"
+            f"  org.opencontainers.image.revision: {revision}\n"
+        )
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary) / product
         root.mkdir()
         (root / "Chart.yaml").write_text(
-            f"apiVersion: v2\nname: {product}\nversion: {version}\n",
+            f"apiVersion: v2\nname: {product}\nversion: {version}\n{annotations}",
             encoding="utf-8",
         )
         (root / "values.yaml").write_text("{}\n", encoding="utf-8")
@@ -839,6 +855,7 @@ def run_git(args):
     if "-C" in args:
         destination = Path(args[args.index("-C") + 1])
         available = destination / ".git" / "commit-available"
+        head_ref = destination / ".git" / "head-ref"
         if "cat-file" in args:
             return 0 if available.is_file() else 1
         if "fetch" in args:
@@ -848,12 +865,18 @@ def run_git(args):
         if "checkout" in args:
             if not available.is_file():
                 return 1
+            # Remember the requested ref so rev-parse HEAD can echo it back;
+            # the real verifier asserts HEAD matches the requested commit.
+            head_ref.write_text(args[-1], encoding="utf-8")
             write_verifier_checkout(destination)
             return 0
         if "rev-parse" in args:
             if not available.is_file():
                 return 1
-            print("abcdef1" + "a" * 33)
+            if head_ref.is_file():
+                print(head_ref.read_text(encoding="utf-8").strip())
+            else:
+                print("abcdef1" + "a" * 33)
             return 0
     return 2
 

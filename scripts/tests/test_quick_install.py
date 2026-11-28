@@ -94,6 +94,29 @@ class QuickInstallContractTest(unittest.TestCase):
         )
         self.assertNotIn("nereidforge.local", self.script)
 
+    def test_floating_chart_verifier_ref_is_derived_from_revision_annotation(self):
+        # The floating chart's own OCI revision annotation supplies the exact
+        # verifier checkout so deployment.env needs no hand-copied commit SHA.
+        self.assertIn(
+            'org.opencontainers.image.revision',
+            self.script,
+        )
+        self.assertIn(
+            'annotation is missing or malformed',
+            self.script,
+        )
+        # The explicit override still takes precedence when supplied.
+        override_block = re.search(
+            r'if \[\[ -n "\$\{NF_VERIFIER_REF:-\}" \]\]; then\n'
+            r'\s+verifier_ref="\$NF_VERIFIER_REF"(.*?)fi',
+            self.script,
+            re.S,
+        )
+        self.assertIsNotNone(override_block)
+        self.assertIn('verifier_ref="$NF_VERIFIER_REF"', override_block.group(0))
+        # The derived revision must be validated as a full 40-char commit.
+        self.assertRegex(self.script, r'\[\[ "\$chart_revision" =~ \^\[0-9a-f\]\{40\}\$ \]\]')
+
     def test_kubeflow_retry_controls_and_credential_file_inventory_are_documented(self):
         for name in ("KUBEFLOW_APPLY_ATTEMPTS", "KUBEFLOW_APPLY_RETRY_DELAY"):
             self.assertIn(name, self.guide)

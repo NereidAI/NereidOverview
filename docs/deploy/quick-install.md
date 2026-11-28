@@ -127,28 +127,33 @@ for those operations.
 `forge-acceptance` always runs an exact-commit, verification-only checkout of
 NereidForge. With a legacy immutable chart (resolved `0.0.0-dev-<sha7>`) the
 frozen chart version names that commit directly. A floating `0.0.0-dev` chart
-intentionally carries no source identity, so for that chart shape
-`NF_VERIFIER_REF` is **required** and must be the reviewed, full 40-character
-NereidForge commit ID; the stage fails closed without it. The same variable also
-overrides the default commit of an immutable chart when a reviewed fix changes
-only the verifier, without republishing or changing the runtime artifacts:
+intentionally carries no source identity in its version, so the publication
+engine stamps the exact full source commit into the archive's
+`org.opencontainers.image.revision` Chart.yaml annotation. The stage reads
+that revision from the digest-frozen chart archive and checks out the matching
+commit automatically; no operator-managed variable is required on the normal
+path. A floating chart whose annotation is missing or malformed still fails
+closed.
+
+`NF_VERIFIER_REF` remains as an explicit, reviewed **override** for the rare
+case where a fix changes only the verifier without republishing the runtime
+artifacts. When set, it replaces the chart-derived commit and must be the full
+40-character lowercase NereidForge commit ID; branches, tags, short SHA values,
+and malformed references are rejected before cluster installation begins:
 
 ```bash
-# Replace this example with the reviewed, full NF commit ID.
+# Verifier-only override; normally left unset.
 export NF_VERIFIER_REF="0123456789abcdef0123456789abcdef01234567"
 ```
 
-Add the setting to `deployment.env` before the initial acceptance run or while
-`forge-acceptance` is incomplete, then rerun the normal command. The value must
-be exactly 40 lowercase hexadecimal characters identifying a Git commit;
-branches, tags, short SHA values, and malformed references are rejected before
-cluster installation begins. Use a commit reachable from the NF repository's
+Add the setting to `deployment.env` while `forge-acceptance` is incomplete,
+then rerun the normal command. Use a commit reachable from the NF repository's
 default branch after its PR has been merged.
 
 The override has a separate checkout under `$DEPLOYMENT_ROOT/verifiers/`. It
 changes neither `NEREIDFORGE_VERSION` nor any frozen chart or image digest, and
 it does not rotate credentials or weaken the verifier's HTTP checks. Leaving it
-unset preserves the original checkout path and stage fingerprints. Once an
+unset preserves the chart-derived checkout path and stage fingerprints. Once an
 override is recorded in a completed acceptance stage, changing or removing it
 is rejected as a completed-input change. It never substitutes for the manual
 `NF_LIVE_ACCEPTANCE_CONFIRMED=yes` attestation.

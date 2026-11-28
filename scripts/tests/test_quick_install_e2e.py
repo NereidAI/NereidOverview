@@ -874,19 +874,51 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         state["chart_version"] = "0.0.0-dev"
         self.write_cluster(state)
 
-    def test_floating_chart_fails_closed_without_explicit_verifier_ref(self):
+    def test_floating_chart_fails_closed_without_revision_annotation_or_override(self):
         self.use_floating_chart()
 
-        result = self.run_installer(expected=1)
+        result = self.run_installer(
+            expected=1,
+            environment={"FAKE_OMIT_CHART_REVISION": "yes"},
+        )
 
         self.assertEqual(self.current_state(), "forge-acceptance=failed")
         log = (
             self.deployment / "deploy-logs" / "quick-install" / "forge-acceptance.log"
         ).read_text()
-        self.assertIn("Floating 0.0.0-dev chart carries no source commit", log)
+        self.assertIn(
+            "org.opencontainers.image.revision annotation is missing or malformed",
+            log,
+        )
         self.assertIn("NF_VERIFIER_REF", log)
         self.assertEqual(self.count_calls("git\tclone\t"), 0)
         self.assertEqual(self.count_calls("nf\t60_verify/nf-check"), 0)
+        self.assertIn("forge-acceptance", result.stderr)
+
+    def test_floating_chart_derives_verifier_ref_from_revision_annotation(self):
+        # Keep in sync with FAKE_CHART_REVISION in fixtures/fake_suite_host.py.
+        chart_revision = "0123456789abcdef0123456789abcdef01234567"
+
+        self.use_floating_chart()
+
+        # No NF_VERIFIER_REF anywhere in deployment.env: the stamped archive
+        # itself supplies the exact verifier checkout.
+        self.assertNotIn("NF_VERIFIER_REF", self.config.read_text())
+        self.run_installer(expected=20)
+
+        self.assertEqual(self.current_state(), "forge-acceptance=waiting")
+        verifier = self.deployment / "verifiers" / (
+            f"nereidforge-0.0.0-dev-verifier-{chart_revision}"
+        )
+        self.assertTrue((verifier / "scripts" / "60_verify" / "nf-check.sh").is_file())
+        self.assertTrue(any(
+            line.startswith("git\t-C\t")
+            and line.endswith(f"\tcheckout\t--detach\t{chart_revision}")
+            for line in self.call_lines()
+        ))
+        self.assertEqual(self.count_calls("nf\t60_verify/nf-check"), 1)
+        # The runtime chart keeps the bare floating version.
+        self.assertEqual(self.read_cluster()["chart_version"], "0.0.0-dev")
 
     def test_floating_chart_uses_the_explicit_verifier_ref_end_to_end(self):
         self.use_floating_chart()
