@@ -1135,18 +1135,31 @@ Run the NF fail-closed verifier from a verification-only checkout of an exact
 reviewed development commit. This checkout supplies test tooling only; it is
 not an installation package and installs nothing. A legacy immutable chart
 (resolved `0.0.0-dev-<sha7>`) names its own commit. A floating `0.0.0-dev`
-chart carries no source identity, so export the reviewed full NereidForge
-commit ID as `NF_VERIFIER_REF` first:
+chart carries its source commit in the `org.opencontainers.image.revision`
+Chart.yaml annotation, which is read from the frozen archive; export the
+reviewed full NereidForge commit ID as `NF_VERIFIER_REF` only to override it:
 
 ```bash
 if [[ "$NEREIDFORGE_RESOLVED_VERSION" =~ ^0\.0\.0-dev-[0-9a-f]{7}$ ]]; then
   NEREIDFORGE_VERIFIER_REF="${NEREIDFORGE_RESOLVED_VERSION#0.0.0-dev-}"
 elif [[ "$NEREIDFORGE_RESOLVED_VERSION" == "0.0.0-dev" ]]; then
-  [[ -n "${NF_VERIFIER_REF:-}" && "$NF_VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]] || {
-    echo 'Set NF_VERIFIER_REF to the reviewed full NereidForge commit ID' >&2
+  NEREIDFORGE_VERIFIER_REF="$(
+    helm show chart "$NEREIDFORGE_APP_CHART" | python3 -c '
+import sys
+import yaml
+
+chart = yaml.safe_load(sys.stdin)
+print((chart.get("annotations") or {}).get(
+    "org.opencontainers.image.revision", ""))
+'
+  )"
+  if [[ -n "${NF_VERIFIER_REF:-}" && "$NF_VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]]; then
+    NEREIDFORGE_VERIFIER_REF="$NF_VERIFIER_REF"
+  fi
+  [[ "$NEREIDFORGE_VERIFIER_REF" =~ ^[0-9a-f]{40}$ ]] || {
+    echo 'Floating chart lacks a source-revision annotation; republish it or set NF_VERIFIER_REF' >&2
     exit 1
   }
-  NEREIDFORGE_VERIFIER_REF="$NF_VERIFIER_REF"
 else
   echo "Unsupported NereidForge resolved version: $NEREIDFORGE_RESOLVED_VERSION" >&2
   exit 1

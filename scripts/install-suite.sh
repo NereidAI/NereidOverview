@@ -1188,6 +1188,7 @@ prepare_nf_verifier_checkout() {
 
 run_nf_verifier() {
     local version short_sha verifier_ref checkout_id verifier temporary
+    local archive chart_revision
     version="$(suite_frozen_chart_version nereidforge "$NEREIDFORGE_VERSION")"
     short_sha="${version#0.0.0-dev-}"
     if [[ "$short_sha" =~ ^[0-9a-f]{7}$ ]]; then
@@ -1196,15 +1197,39 @@ run_nf_verifier() {
         verifier_ref="$short_sha"
         checkout_id="$version"
     elif [[ "$version" == "0.0.0-dev" ]]; then
-        # A floating development chart intentionally carries no source commit.
-        # The reviewed verifier commit must therefore be named explicitly so
-        # acceptance still runs an exact, reproducible checkout.
-        [[ -n "${NF_VERIFIER_REF:-}" ]] || {
-            echo "Floating 0.0.0-dev chart carries no source commit;" >&2
-            echo "set NF_VERIFIER_REF to the reviewed full NereidForge commit ID" >&2
+        # A floating development chart intentionally carries no source commit
+        # in its version. The publisher stamps the exact full source revision
+        # into the archive's org.opencontainers.image.revision annotation, so
+        # the digest-frozen chart recovers a reproducible verifier checkout on
+        # its own. An explicit NF_VERIFIER_REF remains supported as a reviewed
+        # verifier-only override and takes precedence.
+        archive="$(suite_pull_chart_frozen nereidforge "$NEREIDFORGE_VERSION")"
+        chart_revision="$(helm show chart "$archive" | python3 -c '
+import sys
+import yaml
+
+chart = yaml.safe_load(sys.stdin)
+print((chart.get("annotations") or {}).get(
+    "org.opencontainers.image.revision", ""))
+')"
+        if [[ -n "${NF_VERIFIER_REF:-}" ]]; then
+            verifier_ref="$NF_VERIFIER_REF"
+            if [[ "$chart_revision" =~ ^[0-9a-f]{40}$ \
+                  && "$chart_revision" != "$verifier_ref" ]]; then
+                printf '[INFO] NF verifier override %s replaces chart revision %s\n' \
+                    "$verifier_ref" "$chart_revision" >&2
+            fi
+        elif [[ "$chart_revision" =~ ^[0-9a-f]{40}$ ]]; then
+            verifier_ref="$chart_revision"
+            printf '[INFO] NF verifier checkout derived from floating chart revision %s\n' \
+                "$verifier_ref" >&2
+        else
+            echo "Floating 0.0.0-dev chart carries no source commit and its" >&2
+            echo "org.opencontainers.image.revision annotation is missing or malformed." >&2
+            echo "Republish the chart with the current publication engine, or set" >&2
+            echo "NF_VERIFIER_REF to the reviewed full NereidForge commit ID." >&2
             return 1
-        }
-        verifier_ref="$NF_VERIFIER_REF"
+        fi
         checkout_id="$version-verifier-$verifier_ref"
     else
         echo "NF verifier requires a supported development chart version: $version" >&2
