@@ -270,6 +270,15 @@ class QuickInstallFakeEndToEndTest(unittest.TestCase):
         self.assertIn("PG_ADMIN_PASSWORD=", self.pre_environment().read_text())
         self.assertTrue(marker.is_file())
 
+    def test_rendered_pre_handoff_carries_the_unified_admin_identity(self):
+        self.run_installer(expected=20)
+        lines = self.pre_environment().read_text(encoding="utf-8").splitlines()
+        self.assertIn("DEX_STATIC_EMAIL=admin@nereidai.local", lines)
+        self.assertFalse(
+            any("nereidforge.local" in line for line in lines),
+            lines,
+        )
+
     def test_pending_foreign_release_is_rejected_before_mutation(self):
         state = self.read_cluster()
         state["pending_releases"] = ["nereidsphere"]

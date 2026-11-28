@@ -76,9 +76,13 @@ class ForgeDevelopmentRunbookTest(unittest.TestCase):
         self.assertIn("including after a disconnect", operator_section)
         self.assertNotRegex(self.section, r"(?m)^export ")
 
+    def test_runbook_uses_the_unified_nereidai_admin_identity_everywhere(self):
+        self.assertNotIn("admin@nereidforge.local", self.text)
+        self.assertIn("admin@nereidai.local", self.text)
+
     def test_pre_inputs_and_tools_are_validated_before_the_ordered_stages(self):
         pre_section = self.section.split("### 7.2", 1)[1].split("### 7.3", 1)[0]
-        self.assertIn("DEX_STATIC_EMAIL=admin@nereidforge.local", pre_section)
+        self.assertIn("DEX_STATIC_EMAIL=admin@nereidai.local", pre_section)
         self.assertNotIn("DEX_STATIC_EMAIL=admin@example.org", pre_section)
         self.assertNotIn('admin@$BASE_DOMAIN', pre_section)
         for variable in (
